@@ -530,8 +530,7 @@ pub const mat = struct {
 
         const h = @tan(fovy / 2.0);
 
-        const flip_y = false; // (for vulkan, opengl is the opposite) false => y is down, true y is up
-        const y = if (flip_y) -1 else 1;
+        const y = -1; // In Vulkan -Y is up
 
         return .{
             .{ 1 / (aspect * h), 0, 0, 0 },
@@ -696,17 +695,15 @@ pub const mat = struct {
 };
 
 pub const Sphere = struct {
-    const Self = @This();
-
     center: Vec3,
     radius: f32,
 
-    pub fn contains(self: Self, point: Vec3) bool {
+    pub fn contains(self: @This(), point: Vec3) bool {
         const tolerance = 0.0001;
         return vec.distance(self.center, point) <= self.radius + tolerance;
     }
 
-    pub fn circumsphere(a: Vec3, b: Vec3, c: Vec3, d: Vec3) Self {
+    pub fn circumsphere(a: Vec3, b: Vec3, c: Vec3, d: Vec3) @This() {
         const a2 = vec.length2(a);
         const b2 = vec.length2(b);
         const c2 = vec.length2(c);
@@ -746,7 +743,7 @@ pub const Sphere = struct {
         };
     }
 
-    pub fn circumsphereTriangle(a: Vec3, b: Vec3, c: Vec3) Sphere {
+    pub fn circumsphereTriangle(a: Vec3, b: Vec3, c: Vec3) @This() {
         const ca = vec.sub(c, a);
         const ba = vec.sub(b, a);
         const crs = vec.cross(ba, ca);
@@ -763,7 +760,7 @@ pub const Sphere = struct {
         };
     }
 
-    pub fn fromDiameter(a: Vec3, b: Vec3) Sphere {
+    pub fn fromDiameter(a: Vec3, b: Vec3) @This() {
         const center = vec.mul(vec.add(a, b), 0.5);
         return .{
             .center = center,
