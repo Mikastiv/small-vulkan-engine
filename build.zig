@@ -43,7 +43,6 @@ pub fn build(b: *std.Build) void {
     });
     cimgui.linkLibCpp();
     cimgui.linkLibrary(glfw);
-    cimgui.addIncludePath(.{ .path = "lib/cimgui" });
     cimgui.addIncludePath(.{ .path = "lib/cimgui/imgui" });
     cimgui.addCSourceFiles(.{
         .files = &.{
@@ -76,6 +75,8 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary(vulkan_lib);
     exe.addIncludePath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "include" }) });
     exe.addLibraryPath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "lib" }) });
+    exe.addIncludePath(.{ .path = "lib/cimgui" });
+    exe.addIncludePath(.{ .path = "lib/cimgui/imgui" });
     exe.addIncludePath(.{ .path = "lib/stb_image" });
     exe.addIncludePath(.{ .path = "lib/vma" });
     exe.addCSourceFile(.{ .file = vma });
