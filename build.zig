@@ -20,9 +20,45 @@ pub fn build(b: *std.Build) void {
     const glfw = b.dependency("glfw", .{
         .target = target,
         .optimize = .ReleaseFast,
-    });
+    }).artifact("glfw");
 
+    const vulkan_lib = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
+    const vulkan_sdk = b.graph.env_map.get("VK_SDK_PATH") orelse @panic("VK_SDK_PATH is not set");
     const shaders = vkgen.ShaderCompileStep.create(b, &.{ "glslc", "--target-env=vulkan1.1" }, "-o");
+
+    const wf = b.addWriteFiles();
+    const vma = wf.add("vk_mem_alloc.cpp",
+        \\#define VMA_IMPLEMENTATION
+        \\#include "vk_mem_alloc.h"
+    );
+    const stb_image = wf.add("stb_image.c",
+        \\#define STB_IMAGE_IMPLEMENTATION
+        \\#include "stb_image.h"
+    );
+
+    const cimgui = b.addStaticLibrary(.{
+        .name = "cimgui",
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    cimgui.linkLibCpp();
+    cimgui.linkLibrary(glfw);
+    cimgui.addIncludePath(.{ .path = "lib/cimgui" });
+    cimgui.addIncludePath(.{ .path = "lib/cimgui/imgui" });
+    cimgui.addCSourceFiles(.{
+        .files = &.{
+            "lib/cimgui/cimgui.cpp",
+            "lib/cimgui/cimgui_impl_glfw.cpp",
+            "lib/cimgui/cimgui_impl_vulkan.cpp",
+            "lib/cimgui/imgui/imgui.cpp",
+            "lib/cimgui/imgui/imgui_demo.cpp",
+            "lib/cimgui/imgui/imgui_draw.cpp",
+            "lib/cimgui/imgui/imgui_impl_glfw.cpp",
+            "lib/cimgui/imgui/imgui_impl_vulkan.cpp",
+            "lib/cimgui/imgui/imgui_tables.cpp",
+            "lib/cimgui/imgui/imgui_widgets.cpp",
+        },
+    });
 
     const exe = b.addExecutable(.{
         .name = "vulkan_guide",
@@ -34,7 +70,16 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("vk-kickstart", vk_kickstart.module("vk-kickstart"));
     exe.root_module.addImport("vulkan-zig", vkzig.module("vulkan-zig"));
     exe.root_module.addImport("shaders", shaders.getModule());
-    exe.linkLibrary(glfw.artifact("glfw"));
+    exe.linkLibCpp();
+    exe.linkLibrary(glfw);
+    exe.linkLibrary(cimgui);
+    exe.linkSystemLibrary(vulkan_lib);
+    exe.addIncludePath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "include" }) });
+    exe.addLibraryPath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "lib" }) });
+    exe.addIncludePath(.{ .path = "lib/stb_image" });
+    exe.addIncludePath(.{ .path = "lib/vma" });
+    exe.addCSourceFile(.{ .file = vma });
+    exe.addCSourceFile(.{ .file = stb_image });
 
     b.installArtifact(exe);
 
