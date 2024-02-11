@@ -19,6 +19,9 @@ stop_rendering: bool = false,
 instance: vkk.Instance,
 device: vkk.Device,
 surface: vk.SurfaceKHR,
+swapchain: vkk.Swapchain,
+swapchain_images: []vk.Image,
+swapchain_image_views: []vk.ImageView,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -29,29 +32,40 @@ pub fn init(allocator: Allocator) !@This() {
     const window = try Window.init(allocator, window_width, window_height, window_title);
     errdefer window.deinit(allocator);
 
-    const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{
-        .required_api_version = vk.API_VERSION_1_3,
-    });
+    const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
     errdefer instance.destroy();
 
     const surface = try window.createSurface(instance.handle);
-    defer vki().destroySurfaceKHR(instance.handle, surface, instance.allocation_callbacks);
+    errdefer vki().destroySurfaceKHR(instance.handle, surface, instance.allocation_callbacks);
 
     const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
         .surface = surface,
-        .required_api_version = vk.API_VERSION_1_3,
-        .required_features_12 = .{
-            .buffer_device_address = vk.TRUE,
-            .descriptor_indexing = vk.TRUE,
-        },
-        .required_features_13 = .{
-            .dynamic_rendering = vk.TRUE,
-            .synchronization_2 = vk.TRUE,
-        },
+        // .required_features_12 = .{
+        //     .buffer_device_address = vk.TRUE,
+        //     .descriptor_indexing = vk.TRUE,
+        // },
+        // .required_features_13 = .{
+        //     .dynamic_rendering = vk.TRUE,
+        //     .synchronization_2 = vk.TRUE,
+        // },
     });
 
     const device = try vkk.Device.create(allocator, &physical_device, null);
     errdefer device.destroy();
+
+    const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
+        .desired_extent = window.extent(),
+        .desired_present_modes = &.{
+            .fifo_khr,
+        },
+    });
+    errdefer swapchain.destroy();
+
+    const images = try swapchain.getImages(allocator);
+    errdefer allocator.free(images);
+
+    const image_views = try swapchain.getImageViews(allocator, images);
+    errdefer swapchain.destroyAndFreeImageViews(allocator, image_views);
 
     return .{
         .allocator = allocator,
@@ -59,10 +73,19 @@ pub fn init(allocator: Allocator) !@This() {
         .instance = instance,
         .device = device,
         .surface = surface,
+        .swapchain = swapchain,
+        .swapchain_images = images,
+        .swapchain_image_views = image_views,
     };
 }
 
-pub fn deinit(self: @This()) void {
+pub fn deinit(self: *@This()) void {
+    self.swapchain.destroyAndFreeImageViews(self.allocator, self.swapchain_image_views);
+    self.allocator.free(self.swapchain_images);
+    self.swapchain.destroy();
+    self.device.destroy();
+    vki().destroySurfaceKHR(self.instance.handle, self.surface, null);
+    self.instance.destroy();
     self.window.deinit(self.allocator);
     c.glfwTerminate();
 }
@@ -92,5 +115,5 @@ fn draw(self: *@This()) !void {
 
 fn errorCallback(error_code: i32, description: [*c]const u8) callconv(.C) void {
     const log = std.log.scoped(.glfw);
-    log.err("glfw: {d}: {s}\n", .{ error_code, description });
+    log.err("{d}: {s}\n", .{ error_code, description });
 }
