@@ -8,8 +8,8 @@
             .hash = "122047b773db60d234bfe5018a5cd6a0f46ee19456a0c824499d75b8ea018cabdf80",
         },
         .vk_kickstart = .{
-            .url = "https://github.com/Mikastiv/vk-kickstart/archive/11885ce8039cdf4b3d0593553bfa6912633d7db9.tar.gz",
-            .hash = "122013007a8f443b5758610f5b27e2f9076505aa6368f736fa261b7f7a9d2b6c663d",
+            .url = "https://github.com/Mikastiv/vk-kickstart/archive/02f6f41f5eb2d19e6075e88951e9b49f9c095cba.tar.gz",
+            .hash = "1220839047d4955084c690737caf88142bac8e80b4de026227711772926d2178c200",
         },
         .glfw = .{
             .url = "https://pkg.machengine.org/glfw/586e14a964740747ca7913fc17096b3bb3d52409.tar.gz",

@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig");
-const engine = @import("engine.zig");
+const Engine = @import("Engine.zig");
 
 const window_width = 800;
 const window_height = 600;
@@ -11,7 +11,7 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
-    try engine.init(allocator);
+    var engine = try Engine.init(allocator);
     defer engine.deinit();
 
     try engine.run();
