@@ -2,8 +2,6 @@ const std = @import("std");
 const c = @import("c.zig");
 const vk = @import("vulkan-zig");
 
-const log = std.log.scoped(.glfw);
-
 width: u32,
 height: u32,
 name: []const u8,
@@ -92,7 +90,7 @@ fn minimizedCallback(window: ?*c.GLFWwindow, minimized: c_int) callconv(.C) void
 
 fn getUserPointer(window: ?*c.GLFWwindow) ?*@This() {
     const ptr = c.glfwGetWindowUserPointer(window) orelse {
-        log.err("window user pointer is null", .{});
+        std.log.err("window user pointer is null", .{});
         return null;
     };
 
