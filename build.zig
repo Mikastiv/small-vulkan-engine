@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
 
     const vk_kickstart = b.dependency("vk_kickstart", .{
         .registry = xml_path,
+        .enable_validation = if (optimize == .Debug) true else false,
     });
 
     const glfw = b.dependency("glfw", .{
