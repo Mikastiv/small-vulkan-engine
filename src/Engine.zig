@@ -22,6 +22,8 @@ surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
+command_pool: vk.CommandPool,
+main_command_buffer: vk.CommandBuffer,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -40,14 +42,6 @@ pub fn init(allocator: Allocator) !@This() {
 
     const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
         .surface = surface,
-        // .required_features_12 = .{
-        //     .buffer_device_address = vk.TRUE,
-        //     .descriptor_indexing = vk.TRUE,
-        // },
-        // .required_features_13 = .{
-        //     .dynamic_rendering = vk.TRUE,
-        //     .synchronization_2 = vk.TRUE,
-        // },
     });
 
     const device = try vkk.Device.create(allocator, &physical_device, null);
@@ -67,6 +61,21 @@ pub fn init(allocator: Allocator) !@This() {
     const image_views = try swapchain.getImageViews(allocator, images);
     errdefer swapchain.destroyAndFreeImageViews(allocator, image_views);
 
+    const command_pool_info = vk.CommandPoolCreateInfo{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = device.physical_device.graphics_family_index,
+    };
+    const command_pool = try vkd().createCommandPool(device.handle, &command_pool_info, null);
+    errdefer vkd().destroyCommandPool(device.handle, command_pool, null);
+
+    const command_buffer_info = vk.CommandBufferAllocateInfo{
+        .command_pool = command_pool,
+        .command_buffer_count = 1,
+        .level = .primary,
+    };
+    var command_buffer: vk.CommandBuffer = .null_handle;
+    try vkd().allocateCommandBuffers(device.handle, &command_buffer_info, @ptrCast(&command_buffer));
+
     return .{
         .allocator = allocator,
         .window = window,
@@ -76,10 +85,13 @@ pub fn init(allocator: Allocator) !@This() {
         .swapchain = swapchain,
         .swapchain_images = images,
         .swapchain_image_views = image_views,
+        .command_pool = command_pool,
+        .main_command_buffer = command_buffer,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    vkd().destroyCommandPool(self.device.handle, self.command_pool, null);
     self.swapchain.destroyAndFreeImageViews(self.allocator, self.swapchain_image_views);
     self.allocator.free(self.swapchain_images);
     self.swapchain.destroy();
