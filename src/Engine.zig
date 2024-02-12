@@ -26,6 +26,9 @@ command_pool: vk.CommandPool,
 main_command_buffer: vk.CommandBuffer,
 render_pass: vk.RenderPass,
 framebuffers: []vk.Framebuffer,
+render_fence: vk.Fence,
+present_semaphore: vk.Semaphore,
+render_semaphore: vk.Semaphore,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -85,9 +88,12 @@ pub fn init(allocator: Allocator) !@This() {
     errdefer {
         for (framebuffers) |framebuffer| {
             vkd().destroyFramebuffer(device.handle, framebuffer, null);
-            allocator.free(framebuffers);
         }
+        allocator.free(framebuffers);
     }
+
+    const sync = try createSyncObjects(device.handle);
+    errdefer destroySyncObjects(device.handle, sync);
 
     return .{
         .allocator = allocator,
@@ -102,10 +108,18 @@ pub fn init(allocator: Allocator) !@This() {
         .main_command_buffer = command_buffer,
         .render_pass = render_pass,
         .framebuffers = framebuffers,
+        .render_fence = sync.render_fence,
+        .present_semaphore = sync.present_semaphore,
+        .render_semaphore = sync.render_semaphore,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    destroySyncObjects(self.device.handle, .{
+        .render_fence = self.render_fence,
+        .present_semaphore = self.present_semaphore,
+        .render_semaphore = self.render_semaphore,
+    });
     for (self.framebuffers) |framebuffer| {
         vkd().destroyFramebuffer(self.device.handle, framebuffer, null);
     }
@@ -141,8 +155,107 @@ pub fn run(self: *@This()) !void {
     }
 }
 
+pub fn waitForIdle(self: *const @This()) !void {
+    try vkd().deviceWaitIdle(self.device.handle);
+}
+
 fn draw(self: *@This()) !void {
-    _ = self;
+    var result = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&self.render_fence), vk.TRUE, std.time.ns_per_s);
+    std.debug.assert(result == .success);
+    try vkd().resetFences(self.device.handle, 1, @ptrCast(&self.render_fence));
+
+    const next_image_result = try vkd().acquireNextImageKHR(
+        self.device.handle,
+        self.swapchain.handle,
+        std.time.ns_per_s,
+        self.present_semaphore,
+        .null_handle,
+    );
+    std.debug.assert(next_image_result.result == .success);
+
+    const image_index = next_image_result.image_index;
+
+    try vkd().resetCommandBuffer(self.main_command_buffer, .{});
+
+    const cmd = self.main_command_buffer;
+
+    const cmd_begin_info = vk.CommandBufferBeginInfo{
+        .flags = .{ .one_time_submit_bit = true },
+    };
+    try vkd().beginCommandBuffer(cmd, &cmd_begin_info);
+
+    const flash = @abs(@sin(@as(f32, @floatFromInt(self.frame_number)) / 120));
+    const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0, 0, flash, 1 } } };
+
+    const render_pass_info = vk.RenderPassBeginInfo{
+        .render_pass = self.render_pass,
+        .framebuffer = self.framebuffers[image_index],
+        .render_area = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain.extent,
+        },
+        .clear_value_count = 1,
+        .p_clear_values = @ptrCast(&clear_value),
+    };
+    vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
+    vkd().cmdEndRenderPass(cmd);
+    try vkd().endCommandBuffer(cmd);
+
+    const wait_stage = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
+    const submit = vk.SubmitInfo{
+        .p_wait_dst_stage_mask = @ptrCast(&wait_stage),
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = @ptrCast(&self.present_semaphore),
+        .signal_semaphore_count = 1,
+        .p_signal_semaphores = @ptrCast(&self.render_semaphore),
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast(&cmd),
+    };
+    try vkd().queueSubmit(self.device.graphics_queue, 1, @ptrCast(&submit), self.render_fence);
+
+    const present_info = vk.PresentInfoKHR{
+        .swapchain_count = 1,
+        .p_swapchains = @ptrCast(&self.swapchain.handle),
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = @ptrCast(&self.render_semaphore),
+        .p_image_indices = @ptrCast(&image_index),
+    };
+    result = try vkd().queuePresentKHR(self.device.graphics_queue, &present_info);
+    std.debug.assert(result == .success);
+
+    self.frame_number += 1;
+}
+
+const SyncObjects = struct {
+    render_fence: vk.Fence,
+    present_semaphore: vk.Semaphore,
+    render_semaphore: vk.Semaphore,
+};
+
+fn destroySyncObjects(device: vk.Device, sync: SyncObjects) void {
+    vkd().destroyFence(device, sync.render_fence, null);
+    vkd().destroySemaphore(device, sync.present_semaphore, null);
+    vkd().destroySemaphore(device, sync.render_semaphore, null);
+}
+
+fn createSyncObjects(device: vk.Device) !SyncObjects {
+    const fence_info = vk.FenceCreateInfo{
+        .flags = .{ .signaled_bit = true },
+    };
+    const fence = try vkd().createFence(device, &fence_info, null);
+    errdefer vkd().destroyFence(device, fence, null);
+
+    const semaphore_info = vk.SemaphoreCreateInfo{};
+    const present_semaphore = try vkd().createSemaphore(device, &semaphore_info, null);
+    errdefer vkd().destroySemaphore(device, present_semaphore, null);
+    const render_semaphore = try vkd().createSemaphore(device, &semaphore_info, null);
+    errdefer vkd().destroySemaphore(device, render_semaphore, null);
+
+    return .{
+        .render_fence = fence,
+        .present_semaphore = present_semaphore,
+        .render_semaphore = render_semaphore,
+    };
 }
 
 fn createFramebuffers(
