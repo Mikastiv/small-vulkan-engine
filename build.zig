@@ -26,6 +26,8 @@ pub fn build(b: *std.Build) void {
     const vulkan_lib = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     const vulkan_sdk = b.graph.env_map.get("VK_SDK_PATH") orelse @panic("VK_SDK_PATH is not set");
     const shaders = vkgen.ShaderCompileStep.create(b, &.{ "glslc", "--target-env=vulkan1.1" }, "-o");
+    shaders.add("vertex", shader_base_path ++ "triangle.vert", .{});
+    shaders.add("fragment", shader_base_path ++ "triangle.frag", .{});
 
     const wf = b.addWriteFiles();
     const vma = wf.add("vk_mem_alloc.cpp",

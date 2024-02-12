@@ -4,9 +4,13 @@ const Window = @import("Window.zig");
 const Allocator = std.mem.Allocator;
 const vk = @import("vulkan-zig");
 const vkk = @import("vk-kickstart");
+const Shaders = @import("shaders");
+const vk_init = @import("vk_init.zig");
 
 const vki = vkk.vki;
 const vkd = vkk.vkd;
+
+const log = std.log.scoped(.engine);
 
 const window_width = 1700;
 const window_height = 900;
@@ -29,6 +33,10 @@ framebuffers: []vk.Framebuffer,
 render_fence: vk.Fence,
 present_semaphore: vk.Semaphore,
 render_semaphore: vk.Semaphore,
+triangle_shader_vert: vk.ShaderModule,
+triangle_shader_frag: vk.ShaderModule,
+triangle_pipeline_layout: vk.PipelineLayout,
+triangle_pipeline: vk.Pipeline,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -95,6 +103,54 @@ pub fn init(allocator: Allocator) !@This() {
     const sync = try createSyncObjects(device.handle);
     errdefer destroySyncObjects(device.handle, sync);
 
+    const triangle_shader_vert = try createShaderModule(device.handle, &Shaders.vertex);
+    errdefer vkd().destroyShaderModule(device.handle, triangle_shader_vert, null);
+    const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.fragment);
+    errdefer vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
+
+    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
+    const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
+    errdefer vkd().destroyPipelineLayout(device.handle, pipeline_layout, null);
+
+    var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
+    defer shader_stages.deinit();
+
+    try shader_stages.append(.{
+        .stage = .{ .vertex_bit = true },
+        .module = triangle_shader_vert,
+        .p_name = "main",
+    });
+    try shader_stages.append(.{
+        .stage = .{ .fragment_bit = true },
+        .module = triangle_shader_frag,
+        .p_name = "main",
+    });
+    const pipeline_builder = PipelineBuilder{
+        .shader_stages = shader_stages,
+        .vertex_input_info = vk.PipelineVertexInputStateCreateInfo{},
+        .input_assembly = vk_init.inputAssemblyCreateInfo(.triangle_list),
+        .viewport = .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(swapchain.extent.width),
+            .height = @floatFromInt(swapchain.extent.height),
+            .min_depth = 0,
+            .max_depth = 1,
+        },
+        .scissor = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = swapchain.extent,
+        },
+        .rasterizer = vk_init.rasterizationStateCreateInfo(.fill),
+        .multisampling = vk_init.multisamplingStateCreateInfo(),
+        .color_blend_attachment = vk_init.colorBlendAttachmentState(),
+        .pipeline_layout = pipeline_layout,
+    };
+
+    const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
+    if (pipeline == null) return error.PipelineCreationFailed;
+    errdefer vkd().destroyPipeline(device.handle, pipeline.?, null);
+
     return .{
         .allocator = allocator,
         .window = window,
@@ -111,10 +167,18 @@ pub fn init(allocator: Allocator) !@This() {
         .render_fence = sync.render_fence,
         .present_semaphore = sync.present_semaphore,
         .render_semaphore = sync.render_semaphore,
+        .triangle_shader_vert = triangle_shader_vert,
+        .triangle_shader_frag = triangle_shader_frag,
+        .triangle_pipeline_layout = pipeline_layout,
+        .triangle_pipeline = pipeline.?,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    vkd().destroyPipeline(self.device.handle, self.triangle_pipeline, null);
+    vkd().destroyPipelineLayout(self.device.handle, self.triangle_pipeline_layout, null);
+    vkd().destroyShaderModule(self.device.handle, self.triangle_shader_vert, null);
+    vkd().destroyShaderModule(self.device.handle, self.triangle_shader_frag, null);
     destroySyncObjects(self.device.handle, .{
         .render_fence = self.render_fence,
         .present_semaphore = self.present_semaphore,
@@ -198,6 +262,10 @@ fn draw(self: *@This()) !void {
         .p_clear_values = @ptrCast(&clear_value),
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
+
+    vkd().cmdBindPipeline(cmd, .graphics, self.triangle_pipeline);
+    vkd().cmdDraw(cmd, 3, 1, 0, 0);
+
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
 
@@ -224,6 +292,15 @@ fn draw(self: *@This()) !void {
     std.debug.assert(result == .success);
 
     self.frame_number += 1;
+}
+
+fn createShaderModule(device: vk.Device, bytecode: []align(4) const u8) !vk.ShaderModule {
+    const create_info = vk.ShaderModuleCreateInfo{
+        .code_size = bytecode.len,
+        .p_code = std.mem.bytesAsSlice(u32, bytecode).ptr,
+    };
+
+    return vkd().createShaderModule(device, &create_info, null);
 }
 
 const SyncObjects = struct {
@@ -323,7 +400,65 @@ fn defaultRenderPass(device: vk.Device, image_format: vk.Format) !vk.RenderPass 
     return vkd().createRenderPass(device, &render_pass_info, null);
 }
 
+const PipelineBuilder = struct {
+    shader_stages: std.ArrayList(vk.PipelineShaderStageCreateInfo),
+    vertex_input_info: vk.PipelineVertexInputStateCreateInfo,
+    input_assembly: vk.PipelineInputAssemblyStateCreateInfo,
+    viewport: vk.Viewport,
+    scissor: vk.Rect2D,
+    rasterizer: vk.PipelineRasterizationStateCreateInfo,
+    multisampling: vk.PipelineMultisampleStateCreateInfo,
+    color_blend_attachment: vk.PipelineColorBlendAttachmentState,
+    pipeline_layout: vk.PipelineLayout,
+
+    fn buildPipeline(self: *const @This(), device: vk.Device, render_pass: vk.RenderPass) ?vk.Pipeline {
+        const viewport_state = vk.PipelineViewportStateCreateInfo{
+            .viewport_count = 1,
+            .p_viewports = @ptrCast(&self.viewport),
+            .scissor_count = 1,
+            .p_scissors = @ptrCast(&self.scissor),
+        };
+
+        const color_blending = vk.PipelineColorBlendStateCreateInfo{
+            .logic_op_enable = vk.FALSE,
+            .logic_op = .copy,
+            .attachment_count = 1,
+            .p_attachments = @ptrCast(&self.color_blend_attachment),
+            .blend_constants = .{ 0, 0, 0, 0 },
+        };
+
+        const pipeline_info = vk.GraphicsPipelineCreateInfo{
+            .stage_count = @intCast(self.shader_stages.items.len),
+            .p_stages = self.shader_stages.items.ptr,
+            .p_vertex_input_state = &self.vertex_input_info,
+            .p_input_assembly_state = &self.input_assembly,
+            .p_viewport_state = &viewport_state,
+            .p_rasterization_state = &self.rasterizer,
+            .p_multisample_state = &self.multisampling,
+            .p_color_blend_state = &color_blending,
+            .layout = self.pipeline_layout,
+            .render_pass = render_pass,
+            .subpass = 0,
+            .base_pipeline_index = -1,
+        };
+
+        var graphics_pipeline: vk.Pipeline = .null_handle;
+        const result = vkd().createGraphicsPipelines(device, .null_handle, 1, @ptrCast(&pipeline_info), null, @ptrCast(&graphics_pipeline));
+        if (result) |res| {
+            if (res == .success) {
+                return graphics_pipeline;
+            } else {
+                log.err("failed to create pipeline: {s}", .{@tagName(res)});
+                return null;
+            }
+        } else |err| {
+            log.err("failed to create pipeline: {s}", .{@errorName(err)});
+            return null;
+        }
+    }
+};
+
 fn errorCallback(error_code: i32, description: [*c]const u8) callconv(.C) void {
-    const log = std.log.scoped(.glfw);
-    log.err("{d}: {s}\n", .{ error_code, description });
+    const glfw_log = std.log.scoped(.glfw);
+    glfw_log.err("{d}: {s}\n", .{ error_code, description });
 }
