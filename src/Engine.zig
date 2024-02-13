@@ -7,8 +7,9 @@ const vkk = @import("vk-kickstart");
 const Shaders = @import("shaders");
 const vk_init = @import("vk_init.zig");
 
-const vki = vkk.vki;
-const vkd = vkk.vkd;
+const vki = vkk.dispatch.vki;
+const vkd = vkk.dispatch.vkd;
+const DeviceDispatch = vkk.dispatch.DeviceDispatch;
 
 const log = std.log.scoped(.engine);
 
@@ -22,6 +23,7 @@ frame_number: usize = 0,
 stop_rendering: bool = false,
 instance: vkk.Instance,
 device: vkk.Device,
+deletion_queue: std.ArrayList(VulkanDeleter),
 surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
@@ -37,6 +39,8 @@ triangle_shader_vert: vk.ShaderModule,
 triangle_shader_frag: vk.ShaderModule,
 triangle_pipeline_layout: vk.PipelineLayout,
 triangle_pipeline: vk.Pipeline,
+red_triangle_pipeline: vk.Pipeline,
+selected_shader: u32 = 0,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -60,26 +64,44 @@ pub fn init(allocator: Allocator) !@This() {
     const device = try vkk.Device.create(allocator, &physical_device, null);
     errdefer device.destroy();
 
+    var deletion_queue = std.ArrayList(VulkanDeleter).init(allocator);
+    errdefer {
+        flushDeletionQueue(device.handle, deletion_queue.items);
+        deletion_queue.deinit();
+    }
+
     const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
         .desired_extent = window.extent(),
         .desired_present_modes = &.{
             .fifo_khr,
         },
     });
-    errdefer swapchain.destroy();
+    try deletion_queue.append(VulkanDeleter.make(swapchain.handle, DeviceDispatch.destroySwapchainKHR));
 
     const images = try swapchain.getImages(allocator);
     errdefer allocator.free(images);
 
     const image_views = try swapchain.getImageViews(allocator, images);
-    errdefer swapchain.destroyAndFreeImageViews(allocator, image_views);
+    for (image_views) |view| {
+        try deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
+    }
+    errdefer allocator.free(image_views);
+
+    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format);
+    try deletion_queue.append(VulkanDeleter.make(render_pass, DeviceDispatch.destroyRenderPass));
+
+    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views);
+    errdefer allocator.free(framebuffers);
+    for (framebuffers) |framebuffer| {
+        try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
+    }
 
     const command_pool_info = vk.CommandPoolCreateInfo{
         .flags = .{ .reset_command_buffer_bit = true },
         .queue_family_index = device.physical_device.graphics_family_index,
     };
     const command_pool = try vkd().createCommandPool(device.handle, &command_pool_info, null);
-    errdefer vkd().destroyCommandPool(device.handle, command_pool, null);
+    try deletion_queue.append(VulkanDeleter.make(command_pool, DeviceDispatch.destroyCommandPool));
 
     const command_buffer_info = vk.CommandBufferAllocateInfo{
         .command_pool = command_pool,
@@ -89,28 +111,23 @@ pub fn init(allocator: Allocator) !@This() {
     var command_buffer: vk.CommandBuffer = .null_handle;
     try vkd().allocateCommandBuffers(device.handle, &command_buffer_info, @ptrCast(&command_buffer));
 
-    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format);
-    errdefer vkd().destroyRenderPass(device.handle, render_pass, null);
-
-    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views);
-    errdefer {
-        for (framebuffers) |framebuffer| {
-            vkd().destroyFramebuffer(device.handle, framebuffer, null);
-        }
-        allocator.free(framebuffers);
-    }
-
     const sync = try createSyncObjects(device.handle);
-    errdefer destroySyncObjects(device.handle, sync);
+    try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
+    try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
+    try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
 
-    const triangle_shader_vert = try createShaderModule(device.handle, &Shaders.vertex);
-    errdefer vkd().destroyShaderModule(device.handle, triangle_shader_vert, null);
-    const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.fragment);
-    errdefer vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
+    const triangle_shader_vert = try createShaderModule(device.handle, &Shaders.colored_triangle_vert);
+    try deletion_queue.append(VulkanDeleter.make(triangle_shader_vert, DeviceDispatch.destroyShaderModule));
+    const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.colored_triangle_frag);
+    try deletion_queue.append(VulkanDeleter.make(triangle_shader_frag, DeviceDispatch.destroyShaderModule));
+    const red_triangle_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_vert);
+    try deletion_queue.append(VulkanDeleter.make(red_triangle_shader_vert, DeviceDispatch.destroyShaderModule));
+    const red_triangle_shader_frag = try createShaderModule(device.handle, &Shaders.triangle_frag);
+    try deletion_queue.append(VulkanDeleter.make(red_triangle_shader_frag, DeviceDispatch.destroyShaderModule));
 
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
     const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
-    errdefer vkd().destroyPipelineLayout(device.handle, pipeline_layout, null);
+    try deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
 
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
     defer shader_stages.deinit();
@@ -149,7 +166,13 @@ pub fn init(allocator: Allocator) !@This() {
 
     const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
     if (pipeline == null) return error.PipelineCreationFailed;
-    errdefer vkd().destroyPipeline(device.handle, pipeline.?, null);
+    try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
+
+    shader_stages.items[0].module = red_triangle_shader_vert;
+    shader_stages.items[1].module = red_triangle_shader_frag;
+    const red_pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
+    if (red_pipeline == null) return error.PipelineCreationFailed;
+    try deletion_queue.append(VulkanDeleter.make(red_pipeline.?, DeviceDispatch.destroyPipeline));
 
     return .{
         .allocator = allocator,
@@ -157,6 +180,7 @@ pub fn init(allocator: Allocator) !@This() {
         .instance = instance,
         .device = device,
         .surface = surface,
+        .deletion_queue = deletion_queue,
         .swapchain = swapchain,
         .swapchain_images = images,
         .swapchain_image_views = image_views,
@@ -171,28 +195,16 @@ pub fn init(allocator: Allocator) !@This() {
         .triangle_shader_frag = triangle_shader_frag,
         .triangle_pipeline_layout = pipeline_layout,
         .triangle_pipeline = pipeline.?,
+        .red_triangle_pipeline = red_pipeline.?,
     };
 }
 
 pub fn deinit(self: *@This()) void {
-    vkd().destroyPipeline(self.device.handle, self.triangle_pipeline, null);
-    vkd().destroyPipelineLayout(self.device.handle, self.triangle_pipeline_layout, null);
-    vkd().destroyShaderModule(self.device.handle, self.triangle_shader_vert, null);
-    vkd().destroyShaderModule(self.device.handle, self.triangle_shader_frag, null);
-    destroySyncObjects(self.device.handle, .{
-        .render_fence = self.render_fence,
-        .present_semaphore = self.present_semaphore,
-        .render_semaphore = self.render_semaphore,
-    });
-    for (self.framebuffers) |framebuffer| {
-        vkd().destroyFramebuffer(self.device.handle, framebuffer, null);
-    }
+    flushDeletionQueue(self.device.handle, self.deletion_queue.items);
+    self.deletion_queue.deinit();
     self.allocator.free(self.framebuffers);
-    vkd().destroyRenderPass(self.device.handle, self.render_pass, null);
-    vkd().destroyCommandPool(self.device.handle, self.command_pool, null);
-    self.swapchain.destroyAndFreeImageViews(self.allocator, self.swapchain_image_views);
+    self.allocator.free(self.swapchain_image_views);
     self.allocator.free(self.swapchain_images);
-    self.swapchain.destroy();
     self.device.destroy();
     vki().destroySurfaceKHR(self.instance.handle, self.surface, null);
     self.instance.destroy();
@@ -210,6 +222,10 @@ pub fn run(self: *@This()) !void {
             self.stop_rendering = false;
         }
 
+        if (self.window.keyPressed(c.GLFW_KEY_SPACE)) {
+            self.selected_shader ^= 1;
+        }
+
         if (self.stop_rendering) {
             std.time.sleep(std.time.ns_per_ms * 100);
             continue;
@@ -221,6 +237,43 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+const VulkanDeleter = struct {
+    handle: usize,
+    delete_fn: *const fn (self: *const @This(), device: vk.Device) void,
+
+    fn make(handle: anytype, func: anytype) @This() {
+        const T = @TypeOf(handle);
+        const info = @typeInfo(T);
+        if (info != .Enum) @compileError("handle must be a Vulkan handle");
+
+        const Fn = @TypeOf(func);
+        if (@typeInfo(Fn) != .Fn) @compileError("func must be a function");
+
+        const Deleter = struct {
+            fn delete_impl(deleter: *const VulkanDeleter, device: vk.Device) void {
+                const h: T = @enumFromInt(deleter.handle);
+                func(vkd(), device, h, null);
+            }
+        };
+
+        return .{
+            .handle = @intFromEnum(handle),
+            .delete_fn = Deleter.delete_impl,
+        };
+    }
+
+    fn delete(self: *const @This(), device: vk.Device) void {
+        self.delete_fn(self, device);
+    }
+};
+
+fn flushDeletionQueue(device: vk.Device, entries: []const VulkanDeleter) void {
+    var it = std.mem.reverseIterator(entries);
+    while (it.next()) |entry| {
+        entry.delete(device);
+    }
 }
 
 fn draw(self: *@This()) !void {
@@ -263,7 +316,11 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    vkd().cmdBindPipeline(cmd, .graphics, self.triangle_pipeline);
+    if (self.selected_shader == 0)
+        vkd().cmdBindPipeline(cmd, .graphics, self.triangle_pipeline)
+    else
+        vkd().cmdBindPipeline(cmd, .graphics, self.red_triangle_pipeline);
+
     vkd().cmdDraw(cmd, 3, 1, 0, 0);
 
     vkd().cmdEndRenderPass(cmd);
@@ -316,13 +373,11 @@ fn destroySyncObjects(device: vk.Device, sync: SyncObjects) void {
 }
 
 fn createSyncObjects(device: vk.Device) !SyncObjects {
-    const fence_info = vk.FenceCreateInfo{
-        .flags = .{ .signaled_bit = true },
-    };
+    const fence_info = vk_init.fenceCreateInfo(.{ .signaled_bit = true });
     const fence = try vkd().createFence(device, &fence_info, null);
     errdefer vkd().destroyFence(device, fence, null);
 
-    const semaphore_info = vk.SemaphoreCreateInfo{};
+    const semaphore_info = vk_init.semaphoreCreateInfo(.{});
     const present_semaphore = try vkd().createSemaphore(device, &semaphore_info, null);
     errdefer vkd().destroySemaphore(device, present_semaphore, null);
     const render_semaphore = try vkd().createSemaphore(device, &semaphore_info, null);

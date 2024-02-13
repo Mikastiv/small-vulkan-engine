@@ -9,6 +9,8 @@ handle: *c.GLFWwindow,
 framebuffer_resized: bool = false,
 minimized: bool = false,
 
+key_events: [512]c_int = [_]c_int{0} ** 512,
+
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, name: []const u8) !*@This() {
     c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
     c.glfwWindowHint(c.GLFW_RESIZABLE, c.GLFW_TRUE);
@@ -23,6 +25,10 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, name: []const
     const self = try allocator.create(@This());
     errdefer allocator.destroy(self);
 
+    _ = c.glfwSetFramebufferSizeCallback(handle, framebufferResizeCallback);
+    _ = c.glfwSetWindowIconifyCallback(handle, minimizedCallback);
+    _ = c.glfwSetKeyCallback(handle, keyCallback);
+
     self.* = .{
         .width = width,
         .height = height,
@@ -31,8 +37,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, name: []const
     };
 
     c.glfwSetWindowUserPointer(handle, self);
-    _ = c.glfwSetFramebufferSizeCallback(handle, framebufferResizeCallback);
-    _ = c.glfwSetWindowIconifyCallback(handle, minimizedCallback);
 
     return self;
 }
@@ -76,6 +80,12 @@ pub fn framebufferSize(self: *const @This()) Size {
     };
 }
 
+pub fn keyPressed(self: *@This(), key: c_int) bool {
+    const pressed = self.key_events[@intCast(key)];
+    self.key_events[@intCast(key)] = 0;
+    return pressed == c.GLFW_PRESS;
+}
+
 fn framebufferResizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int) callconv(.C) void {
     const self = getUserPointer(window) orelse return;
     self.framebuffer_resized = true;
@@ -86,6 +96,11 @@ fn framebufferResizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int
 fn minimizedCallback(window: ?*c.GLFWwindow, minimized: c_int) callconv(.C) void {
     const self = getUserPointer(window) orelse return;
     self.minimized = if (minimized != 0) true else false;
+}
+
+fn keyCallback(window: ?*c.GLFWwindow, key: c_int, _: c_int, action: c_int, _: c_int) callconv(.C) void {
+    const self = getUserPointer(window) orelse return;
+    self.key_events[@intCast(key)] = action;
 }
 
 fn getUserPointer(window: ?*c.GLFWwindow) ?*@This() {

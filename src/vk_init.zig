@@ -46,3 +46,15 @@ pub fn colorBlendAttachmentState() vk.PipelineColorBlendAttachmentState {
         .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
     };
 }
+
+pub fn fenceCreateInfo(flags: vk.FenceCreateFlags) vk.FenceCreateInfo {
+    return .{
+        .flags = flags,
+    };
+}
+
+pub fn semaphoreCreateInfo(flags: vk.SemaphoreCreateFlags) vk.SemaphoreCreateInfo {
+    return .{
+        .flags = flags,
+    };
+}
