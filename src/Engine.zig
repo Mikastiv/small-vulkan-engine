@@ -174,10 +174,7 @@ pub fn init(allocator: Allocator) !@This() {
     try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
     try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
 
-    const triangle_shader_vert = try createShaderModule(device.handle, &Shaders.colored_triangle_vert);
     const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.colored_triangle_frag);
-    const red_triangle_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_vert);
-    const red_triangle_shader_frag = try createShaderModule(device.handle, &Shaders.triangle_frag);
     const triangle_mesh_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_mesh_vert);
 
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
@@ -196,7 +193,7 @@ pub fn init(allocator: Allocator) !@This() {
     const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
     try deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
 
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
     var pipeline_builder = PipelineBuilder{
         .shader_stages = shader_stages,
@@ -221,11 +218,6 @@ pub fn init(allocator: Allocator) !@This() {
         .depth_stencil = vk_init.depthStencilCreateInfo(true, true, .less),
     };
 
-    shader_stages.clearRetainingCapacity();
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
-    pipeline_builder.shader_stages = shader_stages;
-
     const vertex_description = try Mesh.Vertex.getVertexDescription(allocator);
     defer {
         vertex_description.bindings.deinit();
@@ -240,10 +232,7 @@ pub fn init(allocator: Allocator) !@This() {
     if (pipeline == null) return error.PipelineCreationFailed;
     try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
 
-    vkd().destroyShaderModule(device.handle, triangle_shader_vert, null);
     vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
-    vkd().destroyShaderModule(device.handle, red_triangle_shader_vert, null);
-    vkd().destroyShaderModule(device.handle, red_triangle_shader_frag, null);
     vkd().destroyShaderModule(device.handle, triangle_mesh_shader_vert, null);
 
     var buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator);
