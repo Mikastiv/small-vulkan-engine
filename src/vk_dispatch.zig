@@ -42,4 +42,5 @@ pub const device = vk.DeviceCommandFlags{
     .cmdDraw = true,
     .cmdEndRenderPass = true,
     .cmdBindVertexBuffers = true,
+    .cmdPushConstants = true,
 };

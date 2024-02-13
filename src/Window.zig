@@ -64,6 +64,12 @@ pub fn extent(self: *const @This()) vk.Extent2D {
     };
 }
 
+pub fn aspectRatio(self: *const @This()) f32 {
+    const w: f32 = @floatFromInt(self.width);
+    const h: f32 = @floatFromInt(self.height);
+    return w / h;
+}
+
 pub const Size = struct {
     width: u32,
     height: u32,

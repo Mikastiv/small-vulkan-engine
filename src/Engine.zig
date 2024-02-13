@@ -7,6 +7,7 @@ const vkk = @import("vk-kickstart");
 const Shaders = @import("shaders");
 const vk_init = @import("vk_init.zig");
 const Mesh = @import("Mesh.zig");
+const math = @import("math.zig");
 
 const vki = vkk.dispatch.vki;
 const vkd = vkk.dispatch.vkd;
@@ -21,6 +22,11 @@ const window_title = "Vulkan Engine";
 pub const AllocatedBuffer = struct {
     buffer: vk.Buffer,
     allocation: c.VmaAllocation,
+};
+
+pub const MeshPushConstants = extern struct {
+    data: math.Vec4 align(16),
+    render_matrix: math.Mat4 align(16),
 };
 
 allocator: Allocator,
@@ -46,6 +52,7 @@ render_semaphore: vk.Semaphore,
 triangle_pipeline_layout: vk.PipelineLayout,
 triangle_pipeline: vk.Pipeline,
 red_triangle_pipeline: vk.Pipeline,
+mesh_pipeline_layout: vk.PipelineLayout,
 mesh_pipeline: vk.Pipeline,
 triangle_mesh: Mesh,
 selected_shader: u32 = 0,
@@ -167,6 +174,21 @@ pub fn init(allocator: Allocator) !@This() {
     if (red_pipeline == null) return error.PipelineCreationFailed;
     try deletion_queue.append(VulkanDeleter.make(red_pipeline.?, DeviceDispatch.destroyPipeline));
 
+    const push_constant = vk.PushConstantRange{
+        .offset = 0,
+        .size = @sizeOf(MeshPushConstants),
+        .stage_flags = .{ .vertex_bit = true },
+    };
+    const mesh_pipeline_layout_info = vk.PipelineLayoutCreateInfo{
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = @ptrCast(&push_constant),
+    };
+
+    const mesh_pipeline_layout = try vkd().createPipelineLayout(device.handle, &mesh_pipeline_layout_info, null);
+    try deletion_queue.append(VulkanDeleter.make(mesh_pipeline_layout, DeviceDispatch.destroyPipelineLayout));
+
+    pipeline_builder.pipeline_layout = mesh_pipeline_layout;
+
     shader_stages.clearRetainingCapacity();
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
@@ -218,6 +240,7 @@ pub fn init(allocator: Allocator) !@This() {
         .triangle_pipeline_layout = pipeline_layout,
         .triangle_pipeline = pipeline.?,
         .red_triangle_pipeline = red_pipeline.?,
+        .mesh_pipeline_layout = mesh_pipeline_layout,
         .mesh_pipeline = mesh_pipeline.?,
         .triangle_mesh = mesh,
     };
@@ -424,10 +447,21 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    const offset: vk.DeviceSize = 0;
-    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.triangle_mesh.vertex_buffer.buffer), @ptrCast(&offset));
+    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.triangle_mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
 
     vkd().cmdBindPipeline(cmd, .graphics, self.mesh_pipeline);
+
+    const view = math.mat.lookAt(.{ 0, 0, 2 }, .{ 0, 0, 0 }, .{ 0, -1, 0 });
+    const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
+    const model = math.mat.rotation(std.math.degreesToRadians(f32, @as(f32, @floatFromInt(self.frame_number)) * 0.4), .{ 0, 1, 0 });
+    const mesh_matrix = math.mat.mul(&projection, &math.mat.mul(&view, &model));
+
+    const push = MeshPushConstants{
+        .data = .{ 0, 0, 0, 0 },
+        .render_matrix = mesh_matrix,
+    };
+
+    vkd().cmdPushConstants(cmd, self.mesh_pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), @ptrCast(&push));
 
     vkd().cmdDraw(cmd, @intCast(self.triangle_mesh.vertices.items.len), 1, 0, 0);
 
