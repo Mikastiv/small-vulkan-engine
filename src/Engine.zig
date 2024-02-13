@@ -24,9 +24,19 @@ pub const AllocatedBuffer = struct {
     allocation: c.VmaAllocation,
 };
 
+pub const AllocatedImage = struct {
+    image: vk.Image,
+    allocation: c.VmaAllocation,
+};
+
 pub const MeshPushConstants = extern struct {
     data: math.Vec4 align(16),
     render_matrix: math.Mat4 align(16),
+};
+
+pub const Material = struct {
+    pipeline: vk.Pipeline,
+    pipeline_layout: vk.PipelineLayout,
 };
 
 allocator: Allocator,
@@ -36,27 +46,36 @@ frame_number: usize = 0,
 stop_rendering: bool = false,
 instance: vkk.Instance,
 device: vkk.Device,
+
 deletion_queue: std.ArrayList(VulkanDeleter),
 buffer_deletion_queue: std.ArrayList(AllocatedBuffer),
+image_deletion_queue: std.ArrayList(AllocatedImage),
+
 surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
+depth_image: AllocatedImage,
+depth_image_view: vk.ImageView,
+
 command_pool: vk.CommandPool,
 main_command_buffer: vk.CommandBuffer,
+
 render_pass: vk.RenderPass,
+
 framebuffers: []vk.Framebuffer,
 render_fence: vk.Fence,
 present_semaphore: vk.Semaphore,
 render_semaphore: vk.Semaphore,
+
 triangle_pipeline_layout: vk.PipelineLayout,
 triangle_pipeline: vk.Pipeline,
 red_triangle_pipeline: vk.Pipeline,
+
 mesh_pipeline_layout: vk.PipelineLayout,
 mesh_pipeline: vk.Pipeline,
 triangle_mesh: Mesh,
 monkey_mesh: Mesh,
-selected_shader: u32 = 0,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -81,6 +100,7 @@ pub fn init(allocator: Allocator) !@This() {
     try vkCheck(c.vmaCreateAllocator(&vma_info, &vma));
 
     var deletion_queue = std.ArrayList(VulkanDeleter).init(allocator);
+    var image_deletion_queue = std.ArrayList(AllocatedImage).init(allocator);
 
     const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
         .desired_extent = window.extent(),
@@ -97,10 +117,38 @@ pub fn init(allocator: Allocator) !@This() {
         try deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
     }
 
-    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format);
+    const depth_extent = vk.Extent3D{
+        .depth = 1,
+        .width = swapchain.extent.width,
+        .height = swapchain.extent.height,
+    };
+
+    const depth_format = vk.Format.d32_sfloat;
+
+    const depth_image_info = vk_init.imageCreateInfo(depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
+    const depth_image_alloc_info = c.VmaAllocationCreateInfo{
+        .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
+        .requiredFlags = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    };
+
+    var d_image: c.VkImage = undefined;
+    var d_image_allocation: c.VmaAllocation = undefined;
+    try vkCheck(c.vmaCreateImage(vma, @ptrCast(&depth_image_info), &depth_image_alloc_info, &d_image, &d_image_allocation, null));
+
+    const depth_image = AllocatedImage{
+        .image = c.vulkanCHandleToZig(vk.Image, d_image),
+        .allocation = d_image_allocation,
+    };
+    try image_deletion_queue.append(depth_image);
+
+    const depth_image_view_info = vk_init.imageViewCreateInfo(depth_format, depth_image.image, .{ .depth_bit = true });
+    const depth_image_view = try vkd().createImageView(device.handle, &depth_image_view_info, null);
+    try deletion_queue.append(VulkanDeleter.make(depth_image_view, DeviceDispatch.destroyImageView));
+
+    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format, depth_format);
     try deletion_queue.append(VulkanDeleter.make(render_pass, DeviceDispatch.destroyRenderPass));
 
-    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views);
+    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views, depth_image_view);
     for (framebuffers) |framebuffer| {
         try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
     }
@@ -160,6 +208,7 @@ pub fn init(allocator: Allocator) !@This() {
         .multisampling = vk_init.multisamplingStateCreateInfo(),
         .color_blend_attachment = vk_init.colorBlendAttachmentState(),
         .pipeline_layout = pipeline_layout,
+        .depth_stencil = vk_init.depthStencilCreateInfo(true, true, .less),
     };
 
     const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
@@ -231,9 +280,12 @@ pub fn init(allocator: Allocator) !@This() {
         .surface = surface,
         .deletion_queue = deletion_queue,
         .buffer_deletion_queue = buffer_deletion_queue,
+        .image_deletion_queue = image_deletion_queue,
         .swapchain = swapchain,
         .swapchain_images = images,
         .swapchain_image_views = image_views,
+        .depth_image = depth_image,
+        .depth_image_view = depth_image_view,
         .command_pool = command_pool,
         .main_command_buffer = command_buffer,
         .render_pass = render_pass,
@@ -254,6 +306,8 @@ pub fn init(allocator: Allocator) !@This() {
 pub fn deinit(self: *@This()) void {
     self.monkey_mesh.vertices.deinit();
     self.triangle_mesh.vertices.deinit();
+    flushImageDeletionQueue(self.vma, self.image_deletion_queue.items);
+    self.image_deletion_queue.deinit();
     flushBufferDeletionQueue(self.vma, self.buffer_deletion_queue.items);
     self.buffer_deletion_queue.deinit();
     c.vmaDestroyAllocator(self.vma);
@@ -277,10 +331,6 @@ pub fn run(self: *@This()) !void {
             self.stop_rendering = true;
         } else {
             self.stop_rendering = false;
-        }
-
-        if (self.window.keyPressed(c.GLFW_KEY_SPACE)) {
-            self.selected_shader ^= 1;
         }
 
         if (self.stop_rendering) {
@@ -342,11 +392,10 @@ fn createMeshBuffer(
     size: vk.DeviceSize,
     deletion_queue: *std.ArrayList(AllocatedBuffer),
 ) !AllocatedBuffer {
-    const buffer_info = c.VkBufferCreateInfo{
-        .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    const buffer_info = vk.BufferCreateInfo{
         .size = size,
-        .usage = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
     };
 
     const vma_alloc_info = c.VmaAllocationCreateInfo{
@@ -354,7 +403,7 @@ fn createMeshBuffer(
     };
     var buffer: c.VkBuffer = undefined;
     var allocation: c.VmaAllocation = undefined;
-    try vkCheck(c.vmaCreateBuffer(vma, &buffer_info, &vma_alloc_info, &buffer, &allocation, null));
+    try vkCheck(c.vmaCreateBuffer(vma, @ptrCast(&buffer_info), &vma_alloc_info, &buffer, &allocation, null));
 
     const allocated_buffer = AllocatedBuffer{
         .buffer = c.vulkanCHandleToZig(vk.Buffer, buffer),
@@ -409,6 +458,13 @@ fn flushBufferDeletionQueue(vma: c.VmaAllocator, entries: []const AllocatedBuffe
     }
 }
 
+fn flushImageDeletionQueue(vma: c.VmaAllocator, entries: []const AllocatedImage) void {
+    var it = std.mem.reverseIterator(entries);
+    while (it.next()) |entry| {
+        c.vmaDestroyImage(vma, c.vulkanZigHandleToC(c.VkImage, entry.image), entry.allocation);
+    }
+}
+
 fn draw(self: *@This()) !void {
     var result = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&self.render_fence), vk.TRUE, std.time.ns_per_s);
     std.debug.assert(result == .success);
@@ -436,7 +492,9 @@ fn draw(self: *@This()) !void {
 
     const flash = @abs(@sin(@as(f32, @floatFromInt(self.frame_number)) / 120));
     const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0, 0, flash, 1 } } };
+    const depth_clear = vk.ClearValue{ .depth_stencil = .{ .depth = 1, .stencil = 0 } };
 
+    const clear_values = [_]vk.ClearValue{ clear_value, depth_clear };
     const render_pass_info = vk.RenderPassBeginInfo{
         .render_pass = self.render_pass,
         .framebuffer = self.framebuffers[image_index],
@@ -444,8 +502,8 @@ fn draw(self: *@This()) !void {
             .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapchain.extent,
         },
-        .clear_value_count = 1,
-        .p_clear_values = @ptrCast(&clear_value),
+        .clear_value_count = clear_values.len,
+        .p_clear_values = &clear_values,
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
@@ -540,10 +598,10 @@ fn createFramebuffers(
     render_pass: vk.RenderPass,
     extent: vk.Extent2D,
     image_views: []const vk.ImageView,
+    depth_image_view: vk.ImageView,
 ) ![]vk.Framebuffer {
     var framebuffer_info = vk.FramebufferCreateInfo{
         .render_pass = render_pass,
-        .attachment_count = 1,
         .width = extent.width,
         .height = extent.height,
         .layers = 1,
@@ -558,7 +616,9 @@ fn createFramebuffers(
     }
 
     for (0..image_views.len) |i| {
-        framebuffer_info.p_attachments = @ptrCast(&image_views[i]);
+        const attachments = [_]vk.ImageView{ image_views[i], depth_image_view };
+        framebuffer_info.attachment_count = attachments.len;
+        framebuffer_info.p_attachments = &attachments;
         const framebuffer = try vkd().createFramebuffer(device, &framebuffer_info, null);
         try framebuffers.append(framebuffer);
     }
@@ -566,7 +626,7 @@ fn createFramebuffers(
     return framebuffers.toOwnedSlice();
 }
 
-fn defaultRenderPass(device: vk.Device, image_format: vk.Format) !vk.RenderPass {
+fn defaultRenderPass(device: vk.Device, image_format: vk.Format, depth_format: vk.Format) !vk.RenderPass {
     const color_attachment = vk.AttachmentDescription{
         .format = image_format,
         .samples = .{ .@"1_bit" = true },
@@ -583,17 +643,56 @@ fn defaultRenderPass(device: vk.Device, image_format: vk.Format) !vk.RenderPass 
         .layout = .color_attachment_optimal,
     };
 
+    const depth_attachment = vk.AttachmentDescription{
+        .format = depth_format,
+        .samples = .{ .@"1_bit" = true },
+        .load_op = .clear,
+        .store_op = .store,
+        .stencil_load_op = .dont_care,
+        .stencil_store_op = .dont_care,
+        .initial_layout = .undefined,
+        .final_layout = .depth_stencil_attachment_optimal,
+    };
+
+    const depth_attachment_ref = vk.AttachmentReference{
+        .attachment = 1,
+        .layout = .depth_stencil_attachment_optimal,
+    };
+
     const subpass = vk.SubpassDescription{
         .pipeline_bind_point = .graphics,
         .color_attachment_count = 1,
         .p_color_attachments = @ptrCast(&color_attachment_ref),
+        .p_depth_stencil_attachment = @ptrCast(&depth_attachment_ref),
     };
 
+    const dependency = vk.SubpassDependency{
+        .src_subpass = vk.SUBPASS_EXTERNAL,
+        .dst_subpass = 0,
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .src_access_mask = .{},
+        .dst_stage_mask = .{ .color_attachment_output_bit = true },
+        .dst_access_mask = .{ .color_attachment_write_bit = true },
+    };
+
+    const depth_dependency = vk.SubpassDependency{
+        .src_subpass = vk.SUBPASS_EXTERNAL,
+        .dst_subpass = 0,
+        .src_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+        .src_access_mask = .{},
+        .dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true },
+        .dst_access_mask = .{ .depth_stencil_attachment_write_bit = true },
+    };
+
+    const attachments = [_]vk.AttachmentDescription{ color_attachment, depth_attachment };
+    const dependencies = [_]vk.SubpassDependency{ dependency, depth_dependency };
     const render_pass_info = vk.RenderPassCreateInfo{
-        .attachment_count = 1,
-        .p_attachments = @ptrCast(&color_attachment),
+        .attachment_count = attachments.len,
+        .p_attachments = &attachments,
         .subpass_count = 1,
         .p_subpasses = @ptrCast(&subpass),
+        .dependency_count = dependencies.len,
+        .p_dependencies = &dependencies,
     };
 
     return vkd().createRenderPass(device, &render_pass_info, null);
@@ -609,6 +708,7 @@ const PipelineBuilder = struct {
     multisampling: vk.PipelineMultisampleStateCreateInfo,
     color_blend_attachment: vk.PipelineColorBlendAttachmentState,
     pipeline_layout: vk.PipelineLayout,
+    depth_stencil: vk.PipelineDepthStencilStateCreateInfo,
 
     fn buildPipeline(self: *const @This(), device: vk.Device, render_pass: vk.RenderPass) ?vk.Pipeline {
         const viewport_state = vk.PipelineViewportStateCreateInfo{
@@ -635,6 +735,7 @@ const PipelineBuilder = struct {
             .p_rasterization_state = &self.rasterizer,
             .p_multisample_state = &self.multisampling,
             .p_color_blend_state = &color_blending,
+            .p_depth_stencil_state = &self.depth_stencil,
             .layout = self.pipeline_layout,
             .render_pass = render_pass,
             .subpass = 0,
