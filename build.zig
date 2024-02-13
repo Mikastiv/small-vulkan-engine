@@ -41,6 +41,10 @@ pub fn build(b: *std.Build) void {
         \\#define STB_IMAGE_IMPLEMENTATION
         \\#include "stb_image.h"
     );
+    const tinyobj = wf.add("tinyobj.c",
+        \\#define TINYOBJ_LOADER_C_IMPLEMENTATION
+        \\#include "tiny_obj_loader.h"
+    );
 
     const cimgui = b.addStaticLibrary(.{
         .name = "cimgui",
@@ -85,8 +89,10 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "lib/cimgui/imgui" });
     exe.addIncludePath(.{ .path = "lib/stb_image" });
     exe.addIncludePath(.{ .path = "lib/vma" });
+    exe.addIncludePath(.{ .path = "lib/tinyobj" });
     exe.addCSourceFile(.{ .file = vma });
     exe.addCSourceFile(.{ .file = stb_image });
+    exe.addCSourceFile(.{ .file = tinyobj });
 
     b.installArtifact(exe);
 

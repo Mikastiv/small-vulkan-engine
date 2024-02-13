@@ -55,6 +55,7 @@ red_triangle_pipeline: vk.Pipeline,
 mesh_pipeline_layout: vk.PipelineLayout,
 mesh_pipeline: vk.Pipeline,
 triangle_mesh: Mesh,
+monkey_mesh: Mesh,
 selected_shader: u32 = 0,
 
 pub fn init(allocator: Allocator) !@This() {
@@ -216,7 +217,10 @@ pub fn init(allocator: Allocator) !@This() {
 
     var buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator);
 
-    const mesh = try loadMesh(allocator, vma, &buffer_deletion_queue);
+    const triangle_vertices = try makeTriangle(allocator);
+    const mesh = try uploadMesh(vma, triangle_vertices, &buffer_deletion_queue);
+    const monkey_vertices = try Mesh.loadFromFile(allocator, "assets/monkey_smooth.obj");
+    const monkey_mesh = try uploadMesh(vma, monkey_vertices, &buffer_deletion_queue);
 
     return .{
         .allocator = allocator,
@@ -243,10 +247,12 @@ pub fn init(allocator: Allocator) !@This() {
         .mesh_pipeline_layout = mesh_pipeline_layout,
         .mesh_pipeline = mesh_pipeline.?,
         .triangle_mesh = mesh,
+        .monkey_mesh = monkey_mesh,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    self.monkey_mesh.vertices.deinit();
     self.triangle_mesh.vertices.deinit();
     flushBufferDeletionQueue(self.vma, self.buffer_deletion_queue.items);
     self.buffer_deletion_queue.deinit();
@@ -290,14 +296,8 @@ pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
 }
 
-fn loadMesh(
-    allocator: Allocator,
-    vma: c.VmaAllocator,
-    deletion_queue: *std.ArrayList(AllocatedBuffer),
-) !Mesh {
+fn makeTriangle(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
     var vertices = try std.ArrayList(Mesh.Vertex).initCapacity(allocator, 3);
-    errdefer vertices.deinit();
-
     try vertices.append(.{
         .position = .{ 1, 1, 0 },
         .normal = .{ 0, 0, 0 },
@@ -313,7 +313,14 @@ fn loadMesh(
         .normal = .{ 0, 0, 0 },
         .color = .{ 0, 1, 0 },
     });
+    return vertices;
+}
 
+fn uploadMesh(
+    vma: c.VmaAllocator,
+    vertices: std.ArrayList(Mesh.Vertex),
+    deletion_queue: *std.ArrayList(AllocatedBuffer),
+) !Mesh {
     const buffer = try createMeshBuffer(vma, vertices.items.len * @sizeOf(Mesh.Vertex), deletion_queue);
 
     var data: ?*anyopaque = null;
@@ -356,11 +363,6 @@ fn createMeshBuffer(
     try deletion_queue.append(allocated_buffer);
 
     return allocated_buffer;
-}
-
-fn uploadMesh(self: *const @This(), mesh: *Mesh) !void {
-    _ = self;
-    _ = mesh;
 }
 
 const VulkanDeleter = struct {
@@ -447,7 +449,7 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.triangle_mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
+    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.monkey_mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
 
     vkd().cmdBindPipeline(cmd, .graphics, self.mesh_pipeline);
 
@@ -463,7 +465,7 @@ fn draw(self: *@This()) !void {
 
     vkd().cmdPushConstants(cmd, self.mesh_pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), @ptrCast(&push));
 
-    vkd().cmdDraw(cmd, @intCast(self.triangle_mesh.vertices.items.len), 1, 0, 0);
+    vkd().cmdDraw(cmd, @intCast(self.monkey_mesh.vertices.items.len), 1, 0, 0);
 
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
