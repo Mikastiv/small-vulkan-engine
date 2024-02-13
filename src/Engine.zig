@@ -74,13 +74,6 @@ render_fence: vk.Fence,
 present_semaphore: vk.Semaphore,
 render_semaphore: vk.Semaphore,
 
-triangle_pipeline_layout: vk.PipelineLayout,
-triangle_pipeline: vk.Pipeline,
-red_triangle_pipeline: vk.Pipeline,
-
-mesh_pipeline_layout: vk.PipelineLayout,
-mesh_pipeline: vk.Pipeline,
-
 renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
@@ -187,12 +180,21 @@ pub fn init(allocator: Allocator) !@This() {
     const red_triangle_shader_frag = try createShaderModule(device.handle, &Shaders.triangle_frag);
     const triangle_mesh_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_mesh_vert);
 
-    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
-    const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
-    try deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
-
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
     defer shader_stages.deinit();
+
+    const push_constant = vk.PushConstantRange{
+        .offset = 0,
+        .size = @sizeOf(MeshPushConstants),
+        .stage_flags = .{ .vertex_bit = true },
+    };
+    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = @ptrCast(&push_constant),
+    };
+
+    const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
+    try deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
 
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_shader_vert));
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
@@ -219,34 +221,6 @@ pub fn init(allocator: Allocator) !@This() {
         .depth_stencil = vk_init.depthStencilCreateInfo(true, true, .less),
     };
 
-    const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
-    if (pipeline == null) return error.PipelineCreationFailed;
-    try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
-
-    shader_stages.clearRetainingCapacity();
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, red_triangle_shader_vert));
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, red_triangle_shader_frag));
-    pipeline_builder.shader_stages = shader_stages;
-
-    const red_pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
-    if (red_pipeline == null) return error.PipelineCreationFailed;
-    try deletion_queue.append(VulkanDeleter.make(red_pipeline.?, DeviceDispatch.destroyPipeline));
-
-    const push_constant = vk.PushConstantRange{
-        .offset = 0,
-        .size = @sizeOf(MeshPushConstants),
-        .stage_flags = .{ .vertex_bit = true },
-    };
-    const mesh_pipeline_layout_info = vk.PipelineLayoutCreateInfo{
-        .push_constant_range_count = 1,
-        .p_push_constant_ranges = @ptrCast(&push_constant),
-    };
-
-    const mesh_pipeline_layout = try vkd().createPipelineLayout(device.handle, &mesh_pipeline_layout_info, null);
-    try deletion_queue.append(VulkanDeleter.make(mesh_pipeline_layout, DeviceDispatch.destroyPipelineLayout));
-
-    pipeline_builder.pipeline_layout = mesh_pipeline_layout;
-
     shader_stages.clearRetainingCapacity();
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
@@ -262,9 +236,9 @@ pub fn init(allocator: Allocator) !@This() {
     pipeline_builder.vertex_input_info.vertex_attribute_description_count = @intCast(vertex_description.attributes.items.len);
     pipeline_builder.vertex_input_info.p_vertex_attribute_descriptions = vertex_description.attributes.items.ptr;
 
-    const mesh_pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
-    if (mesh_pipeline == null) return error.PipelineCreationFailed;
-    try deletion_queue.append(VulkanDeleter.make(mesh_pipeline.?, DeviceDispatch.destroyPipeline));
+    const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
+    if (pipeline == null) return error.PipelineCreationFailed;
+    try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
 
     vkd().destroyShaderModule(device.handle, triangle_shader_vert, null);
     vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
@@ -277,7 +251,7 @@ pub fn init(allocator: Allocator) !@This() {
     var meshes = std.StringHashMap(Mesh).init(allocator);
     var materials = std.StringHashMap(Material).init(allocator);
 
-    try createMaterial(&materials, mesh_pipeline.?, mesh_pipeline_layout, "defaultmesh");
+    try createMaterial(&materials, pipeline.?, pipeline_layout, "defaultmesh");
 
     const triangle_vertices = try makeTriangle(allocator);
     var mesh = try uploadMesh(vma, triangle_vertices, &buffer_deletion_queue);
@@ -335,11 +309,6 @@ pub fn init(allocator: Allocator) !@This() {
         .render_fence = sync.render_fence,
         .present_semaphore = sync.present_semaphore,
         .render_semaphore = sync.render_semaphore,
-        .triangle_pipeline_layout = pipeline_layout,
-        .triangle_pipeline = pipeline.?,
-        .red_triangle_pipeline = red_pipeline.?,
-        .mesh_pipeline_layout = mesh_pipeline_layout,
-        .mesh_pipeline = mesh_pipeline.?,
         .meshes = meshes,
         .materials = materials,
         .renderables = renderables,
