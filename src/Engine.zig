@@ -39,6 +39,12 @@ pub const Material = struct {
     pipeline_layout: vk.PipelineLayout,
 };
 
+pub const RenderObject = struct {
+    mesh: *Mesh,
+    material: *Material,
+    transform_matrix: math.Mat4,
+};
+
 allocator: Allocator,
 vma: c.VmaAllocator,
 window: *Window,
@@ -74,8 +80,10 @@ red_triangle_pipeline: vk.Pipeline,
 
 mesh_pipeline_layout: vk.PipelineLayout,
 mesh_pipeline: vk.Pipeline,
-triangle_mesh: Mesh,
-monkey_mesh: Mesh,
+
+renderables: std.ArrayList(RenderObject),
+materials: std.StringHashMap(Material),
+meshes: std.StringHashMap(Mesh),
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -266,10 +274,44 @@ pub fn init(allocator: Allocator) !@This() {
 
     var buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator);
 
+    var meshes = std.StringHashMap(Mesh).init(allocator);
+    var materials = std.StringHashMap(Material).init(allocator);
+
+    try createMaterial(&materials, mesh_pipeline.?, mesh_pipeline_layout, "defaultmesh");
+
     const triangle_vertices = try makeTriangle(allocator);
-    const mesh = try uploadMesh(vma, triangle_vertices, &buffer_deletion_queue);
+    var mesh = try uploadMesh(vma, triangle_vertices, &buffer_deletion_queue);
+    try meshes.put("triangle", mesh);
     const monkey_vertices = try Mesh.loadFromFile(allocator, "assets/monkey_smooth.obj");
-    const monkey_mesh = try uploadMesh(vma, monkey_vertices, &buffer_deletion_queue);
+    mesh = try uploadMesh(vma, monkey_vertices, &buffer_deletion_queue);
+    try meshes.put("monkey", mesh);
+
+    var renderables = std.ArrayList(RenderObject).init(allocator);
+
+    const monkey = RenderObject{
+        .material = materials.getPtr("defaultmesh").?,
+        .mesh = meshes.getPtr("monkey").?,
+        .transform_matrix = math.mat.identity(math.Mat4),
+    };
+    try renderables.append(monkey);
+
+    for (0..40) |x| {
+        for (0..40) |y| {
+            var x_pos: f32 = @floatFromInt(x);
+            x_pos -= 20;
+            var y_pos: f32 = @floatFromInt(y);
+            y_pos -= 20;
+            var transform = math.mat.identity(math.Mat4);
+            transform = math.mat.translate(&transform, .{ x_pos, 0, y_pos });
+            transform = math.mat.scale(&transform, .{ 0.2, 0.2, 0.2 });
+            const tri = RenderObject{
+                .material = materials.getPtr("defaultmesh").?,
+                .mesh = meshes.getPtr("triangle").?,
+                .transform_matrix = transform,
+            };
+            try renderables.append(tri);
+        }
+    }
 
     return .{
         .allocator = allocator,
@@ -298,14 +340,20 @@ pub fn init(allocator: Allocator) !@This() {
         .red_triangle_pipeline = red_pipeline.?,
         .mesh_pipeline_layout = mesh_pipeline_layout,
         .mesh_pipeline = mesh_pipeline.?,
-        .triangle_mesh = mesh,
-        .monkey_mesh = monkey_mesh,
+        .meshes = meshes,
+        .materials = materials,
+        .renderables = renderables,
     };
 }
 
 pub fn deinit(self: *@This()) void {
-    self.monkey_mesh.vertices.deinit();
-    self.triangle_mesh.vertices.deinit();
+    self.renderables.deinit();
+    self.materials.deinit();
+    var it = self.meshes.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.vertices.deinit();
+    }
+    self.meshes.deinit();
     flushImageDeletionQueue(self.vma, self.image_deletion_queue.items);
     self.image_deletion_queue.deinit();
     flushBufferDeletionQueue(self.vma, self.buffer_deletion_queue.items);
@@ -344,6 +392,50 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) void {
+    const camera_pos = math.Vec3{ 0, 6, 10 };
+    const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, -1, 0 });
+    const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
+
+    var last_mesh: ?*Mesh = null;
+    var last_material: ?*Material = null;
+    for (objects) |object| {
+        if (last_material == null) vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
+        if (last_mesh == null) vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
+
+        if (last_material != null and object.material != last_material.?) {
+            vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
+            last_material = object.material;
+        }
+
+        const model = object.transform_matrix;
+
+        const mesh_matrix = math.mat.mul(&projection, &math.mat.mul(&view, &model));
+
+        const push = MeshPushConstants{
+            .data = .{ 0, 0, 0, 0 },
+            .render_matrix = mesh_matrix,
+        };
+
+        vkd().cmdPushConstants(cmd, object.material.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), &push);
+
+        if (last_mesh != null and object.mesh != last_mesh.?) {
+            vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
+            last_mesh = object.mesh;
+        }
+
+        vkd().cmdDraw(cmd, @intCast(object.mesh.vertices.items.len), 1, 0, 0);
+    }
+}
+
+fn createMaterial(materials: *std.StringHashMap(Material), pipeline: vk.Pipeline, layout: vk.PipelineLayout, name: []const u8) !void {
+    const material = Material{
+        .pipeline = pipeline,
+        .pipeline_layout = layout,
+    };
+    try materials.put(name, material);
 }
 
 fn makeTriangle(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
@@ -507,23 +599,7 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.monkey_mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
-
-    vkd().cmdBindPipeline(cmd, .graphics, self.mesh_pipeline);
-
-    const view = math.mat.lookAt(.{ 0, 0, 2 }, .{ 0, 0, 0 }, .{ 0, -1, 0 });
-    const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
-    const model = math.mat.rotation(std.math.degreesToRadians(f32, @as(f32, @floatFromInt(self.frame_number)) * 0.4), .{ 0, 1, 0 });
-    const mesh_matrix = math.mat.mul(&projection, &math.mat.mul(&view, &model));
-
-    const push = MeshPushConstants{
-        .data = .{ 0, 0, 0, 0 },
-        .render_matrix = mesh_matrix,
-    };
-
-    vkd().cmdPushConstants(cmd, self.mesh_pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), @ptrCast(&push));
-
-    vkd().cmdDraw(cmd, @intCast(self.monkey_mesh.vertices.items.len), 1, 0, 0);
+    self.drawObjects(cmd, self.renderables.items);
 
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
