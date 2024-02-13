@@ -30,6 +30,7 @@ pub fn build(b: *std.Build) void {
     shaders.add("triangle_frag", shader_base_path ++ "triangle.frag", .{});
     shaders.add("colored_triangle_vert", shader_base_path ++ "colored_triangle.vert", .{});
     shaders.add("colored_triangle_frag", shader_base_path ++ "colored_triangle.frag", .{});
+    shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
 
     const wf = b.addWriteFiles();
     const vma = wf.add("vk_mem_alloc.cpp",

@@ -26,6 +26,7 @@ pub const device = vk.DeviceCommandFlags{
     .destroyCommandPool = true,
     .allocateCommandBuffers = true,
     .freeCommandBuffers = true,
+    .resetCommandBuffer = true,
     .beginCommandBuffer = true,
     .waitForFences = true,
     .deviceWaitIdle = true,
@@ -40,5 +41,5 @@ pub const device = vk.DeviceCommandFlags{
     .cmdBindPipeline = true,
     .cmdDraw = true,
     .cmdEndRenderPass = true,
-    .resetCommandBuffer = true,
+    .cmdBindVertexBuffers = true,
 };

@@ -1,5 +1,13 @@
 const vk = @import("vulkan-zig");
 
+pub fn pipelineShaderStageCreateInfo(stage: vk.ShaderStageFlags, module: vk.ShaderModule) vk.PipelineShaderStageCreateInfo {
+    return .{
+        .stage = stage,
+        .module = module,
+        .p_name = "main",
+    };
+}
+
 pub fn inputAssemblyCreateInfo(topology: vk.PrimitiveTopology) vk.PipelineInputAssemblyStateCreateInfo {
     return .{
         .topology = topology,

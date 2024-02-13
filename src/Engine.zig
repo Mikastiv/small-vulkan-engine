@@ -6,6 +6,7 @@ const vk = @import("vulkan-zig");
 const vkk = @import("vk-kickstart");
 const Shaders = @import("shaders");
 const vk_init = @import("vk_init.zig");
+const Mesh = @import("Mesh.zig");
 
 const vki = vkk.dispatch.vki;
 const vkd = vkk.dispatch.vkd;
@@ -17,13 +18,20 @@ const window_width = 1700;
 const window_height = 900;
 const window_title = "Vulkan Engine";
 
+pub const AllocatedBuffer = struct {
+    buffer: vk.Buffer,
+    allocation: c.VmaAllocation,
+};
+
 allocator: Allocator,
+vma: c.VmaAllocator,
 window: *Window,
 frame_number: usize = 0,
 stop_rendering: bool = false,
 instance: vkk.Instance,
 device: vkk.Device,
 deletion_queue: std.ArrayList(VulkanDeleter),
+buffer_deletion_queue: std.ArrayList(AllocatedBuffer),
 surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
@@ -35,40 +43,36 @@ framebuffers: []vk.Framebuffer,
 render_fence: vk.Fence,
 present_semaphore: vk.Semaphore,
 render_semaphore: vk.Semaphore,
-triangle_shader_vert: vk.ShaderModule,
-triangle_shader_frag: vk.ShaderModule,
 triangle_pipeline_layout: vk.PipelineLayout,
 triangle_pipeline: vk.Pipeline,
 red_triangle_pipeline: vk.Pipeline,
+mesh_pipeline: vk.Pipeline,
+triangle_mesh: Mesh,
 selected_shader: u32 = 0,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
-    errdefer c.glfwTerminate();
 
     _ = c.glfwSetErrorCallback(errorCallback);
 
     const window = try Window.init(allocator, window_width, window_height, window_title);
-    errdefer window.deinit(allocator);
 
     const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
-    errdefer instance.destroy();
-
     const surface = try window.createSurface(instance.handle);
-    errdefer vki().destroySurfaceKHR(instance.handle, surface, instance.allocation_callbacks);
-
     const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
         .surface = surface,
     });
-
     const device = try vkk.Device.create(allocator, &physical_device, null);
-    errdefer device.destroy();
+
+    const vma_info = c.VmaAllocatorCreateInfo{
+        .instance = c.vulkanZigHandleToC(c.VkInstance, instance.handle),
+        .physicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, physical_device.handle),
+        .device = c.vulkanZigHandleToC(c.VkDevice, device.handle),
+    };
+    var vma: c.VmaAllocator = undefined;
+    try vkCheck(c.vmaCreateAllocator(&vma_info, &vma));
 
     var deletion_queue = std.ArrayList(VulkanDeleter).init(allocator);
-    errdefer {
-        flushDeletionQueue(device.handle, deletion_queue.items);
-        deletion_queue.deinit();
-    }
 
     const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
         .desired_extent = window.extent(),
@@ -79,19 +83,16 @@ pub fn init(allocator: Allocator) !@This() {
     try deletion_queue.append(VulkanDeleter.make(swapchain.handle, DeviceDispatch.destroySwapchainKHR));
 
     const images = try swapchain.getImages(allocator);
-    errdefer allocator.free(images);
 
     const image_views = try swapchain.getImageViews(allocator, images);
     for (image_views) |view| {
         try deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
     }
-    errdefer allocator.free(image_views);
 
     const render_pass = try defaultRenderPass(device.handle, swapchain.image_format);
     try deletion_queue.append(VulkanDeleter.make(render_pass, DeviceDispatch.destroyRenderPass));
 
     const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views);
-    errdefer allocator.free(framebuffers);
     for (framebuffers) |framebuffer| {
         try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
     }
@@ -117,13 +118,10 @@ pub fn init(allocator: Allocator) !@This() {
     try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
 
     const triangle_shader_vert = try createShaderModule(device.handle, &Shaders.colored_triangle_vert);
-    try deletion_queue.append(VulkanDeleter.make(triangle_shader_vert, DeviceDispatch.destroyShaderModule));
     const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.colored_triangle_frag);
-    try deletion_queue.append(VulkanDeleter.make(triangle_shader_frag, DeviceDispatch.destroyShaderModule));
     const red_triangle_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_vert);
-    try deletion_queue.append(VulkanDeleter.make(red_triangle_shader_vert, DeviceDispatch.destroyShaderModule));
     const red_triangle_shader_frag = try createShaderModule(device.handle, &Shaders.triangle_frag);
-    try deletion_queue.append(VulkanDeleter.make(red_triangle_shader_frag, DeviceDispatch.destroyShaderModule));
+    const triangle_mesh_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_mesh_vert);
 
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
     const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
@@ -132,17 +130,9 @@ pub fn init(allocator: Allocator) !@This() {
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
     defer shader_stages.deinit();
 
-    try shader_stages.append(.{
-        .stage = .{ .vertex_bit = true },
-        .module = triangle_shader_vert,
-        .p_name = "main",
-    });
-    try shader_stages.append(.{
-        .stage = .{ .fragment_bit = true },
-        .module = triangle_shader_frag,
-        .p_name = "main",
-    });
-    const pipeline_builder = PipelineBuilder{
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
+    var pipeline_builder = PipelineBuilder{
         .shader_stages = shader_stages,
         .vertex_input_info = vk.PipelineVertexInputStateCreateInfo{},
         .input_assembly = vk_init.inputAssemblyCreateInfo(.triangle_list),
@@ -168,19 +158,53 @@ pub fn init(allocator: Allocator) !@This() {
     if (pipeline == null) return error.PipelineCreationFailed;
     try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
 
-    shader_stages.items[0].module = red_triangle_shader_vert;
-    shader_stages.items[1].module = red_triangle_shader_frag;
+    shader_stages.clearRetainingCapacity();
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, red_triangle_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, red_triangle_shader_frag));
+    pipeline_builder.shader_stages = shader_stages;
+
     const red_pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
     if (red_pipeline == null) return error.PipelineCreationFailed;
     try deletion_queue.append(VulkanDeleter.make(red_pipeline.?, DeviceDispatch.destroyPipeline));
 
+    shader_stages.clearRetainingCapacity();
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
+    pipeline_builder.shader_stages = shader_stages;
+
+    const vertex_description = try Mesh.Vertex.getVertexDescription(allocator);
+    defer {
+        vertex_description.bindings.deinit();
+        vertex_description.attributes.deinit();
+    }
+    pipeline_builder.vertex_input_info.vertex_binding_description_count = @intCast(vertex_description.bindings.items.len);
+    pipeline_builder.vertex_input_info.p_vertex_binding_descriptions = vertex_description.bindings.items.ptr;
+    pipeline_builder.vertex_input_info.vertex_attribute_description_count = @intCast(vertex_description.attributes.items.len);
+    pipeline_builder.vertex_input_info.p_vertex_attribute_descriptions = vertex_description.attributes.items.ptr;
+
+    const mesh_pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
+    if (mesh_pipeline == null) return error.PipelineCreationFailed;
+    try deletion_queue.append(VulkanDeleter.make(mesh_pipeline.?, DeviceDispatch.destroyPipeline));
+
+    vkd().destroyShaderModule(device.handle, triangle_shader_vert, null);
+    vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
+    vkd().destroyShaderModule(device.handle, red_triangle_shader_vert, null);
+    vkd().destroyShaderModule(device.handle, red_triangle_shader_frag, null);
+    vkd().destroyShaderModule(device.handle, triangle_mesh_shader_vert, null);
+
+    var buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator);
+
+    const mesh = try loadMesh(allocator, vma, &buffer_deletion_queue);
+
     return .{
         .allocator = allocator,
+        .vma = vma,
         .window = window,
         .instance = instance,
         .device = device,
         .surface = surface,
         .deletion_queue = deletion_queue,
+        .buffer_deletion_queue = buffer_deletion_queue,
         .swapchain = swapchain,
         .swapchain_images = images,
         .swapchain_image_views = image_views,
@@ -191,15 +215,19 @@ pub fn init(allocator: Allocator) !@This() {
         .render_fence = sync.render_fence,
         .present_semaphore = sync.present_semaphore,
         .render_semaphore = sync.render_semaphore,
-        .triangle_shader_vert = triangle_shader_vert,
-        .triangle_shader_frag = triangle_shader_frag,
         .triangle_pipeline_layout = pipeline_layout,
         .triangle_pipeline = pipeline.?,
         .red_triangle_pipeline = red_pipeline.?,
+        .mesh_pipeline = mesh_pipeline.?,
+        .triangle_mesh = mesh,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    self.triangle_mesh.vertices.deinit();
+    flushBufferDeletionQueue(self.vma, self.buffer_deletion_queue.items);
+    self.buffer_deletion_queue.deinit();
+    c.vmaDestroyAllocator(self.vma);
     flushDeletionQueue(self.device.handle, self.deletion_queue.items);
     self.deletion_queue.deinit();
     self.allocator.free(self.framebuffers);
@@ -239,6 +267,79 @@ pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
 }
 
+fn loadMesh(
+    allocator: Allocator,
+    vma: c.VmaAllocator,
+    deletion_queue: *std.ArrayList(AllocatedBuffer),
+) !Mesh {
+    var vertices = try std.ArrayList(Mesh.Vertex).initCapacity(allocator, 3);
+    errdefer vertices.deinit();
+
+    try vertices.append(.{
+        .position = .{ 1, 1, 0 },
+        .normal = .{ 0, 0, 0 },
+        .color = .{ 0, 1, 0 },
+    });
+    try vertices.append(.{
+        .position = .{ -1, 1, 0 },
+        .normal = .{ 0, 0, 0 },
+        .color = .{ 0, 1, 0 },
+    });
+    try vertices.append(.{
+        .position = .{ 0, -1, 0 },
+        .normal = .{ 0, 0, 0 },
+        .color = .{ 0, 1, 0 },
+    });
+
+    const buffer = try createMeshBuffer(vma, vertices.items.len * @sizeOf(Mesh.Vertex), deletion_queue);
+
+    var data: ?*anyopaque = null;
+    try vkCheck(c.vmaMapMemory(vma, buffer.allocation, &data));
+
+    const ptr: [*]Mesh.Vertex = @ptrCast(@alignCast(data));
+    @memcpy(ptr, vertices.items);
+
+    c.vmaUnmapMemory(vma, buffer.allocation);
+
+    return .{
+        .vertices = vertices,
+        .vertex_buffer = buffer,
+    };
+}
+
+fn createMeshBuffer(
+    vma: c.VmaAllocator,
+    size: vk.DeviceSize,
+    deletion_queue: *std.ArrayList(AllocatedBuffer),
+) !AllocatedBuffer {
+    const buffer_info = c.VkBufferCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+    };
+
+    const vma_alloc_info = c.VmaAllocationCreateInfo{
+        .usage = c.VMA_MEMORY_USAGE_CPU_TO_GPU,
+    };
+    var buffer: c.VkBuffer = undefined;
+    var allocation: c.VmaAllocation = undefined;
+    try vkCheck(c.vmaCreateBuffer(vma, &buffer_info, &vma_alloc_info, &buffer, &allocation, null));
+
+    const allocated_buffer = AllocatedBuffer{
+        .buffer = c.vulkanCHandleToZig(vk.Buffer, buffer),
+        .allocation = allocation,
+    };
+    try deletion_queue.append(allocated_buffer);
+
+    return allocated_buffer;
+}
+
+fn uploadMesh(self: *const @This(), mesh: *Mesh) !void {
+    _ = self;
+    _ = mesh;
+}
+
 const VulkanDeleter = struct {
     handle: usize,
     delete_fn: *const fn (self: *const @This(), device: vk.Device) void,
@@ -273,6 +374,13 @@ fn flushDeletionQueue(device: vk.Device, entries: []const VulkanDeleter) void {
     var it = std.mem.reverseIterator(entries);
     while (it.next()) |entry| {
         entry.delete(device);
+    }
+}
+
+fn flushBufferDeletionQueue(vma: c.VmaAllocator, entries: []const AllocatedBuffer) void {
+    var it = std.mem.reverseIterator(entries);
+    while (it.next()) |entry| {
+        c.vmaDestroyBuffer(vma, c.vulkanZigHandleToC(c.VkBuffer, entry.buffer), entry.allocation);
     }
 }
 
@@ -316,12 +424,12 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    if (self.selected_shader == 0)
-        vkd().cmdBindPipeline(cmd, .graphics, self.triangle_pipeline)
-    else
-        vkd().cmdBindPipeline(cmd, .graphics, self.red_triangle_pipeline);
+    const offset: vk.DeviceSize = 0;
+    vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&self.triangle_mesh.vertex_buffer.buffer), @ptrCast(&offset));
 
-    vkd().cmdDraw(cmd, 3, 1, 0, 0);
+    vkd().cmdBindPipeline(cmd, .graphics, self.mesh_pipeline);
+
+    vkd().cmdDraw(cmd, @intCast(self.triangle_mesh.vertices.items.len), 1, 0, 0);
 
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
@@ -512,6 +620,10 @@ const PipelineBuilder = struct {
         }
     }
 };
+
+fn vkCheck(result: c.VkResult) !void {
+    if (result != c.VK_SUCCESS) return error.VulkanError;
+}
 
 fn errorCallback(error_code: i32, description: [*c]const u8) callconv(.C) void {
     const glfw_log = std.log.scoped(.glfw);
