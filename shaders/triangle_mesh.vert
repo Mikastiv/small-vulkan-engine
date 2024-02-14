@@ -6,12 +6,18 @@ layout (location = 2) in vec3 color;
 
 layout (location = 0) out vec3 out_color;
 
+layout (set = 0, binding = 0) uniform CameraData {
+    mat4 view;
+    mat4 proj;
+    mat4 view_proj;
+} camera_data;
+
 layout (push_constant) uniform Constants {
     vec4 data;
     mat4 render_matrix;
 } push;
 
 void main() {
-    gl_Position = push.render_matrix * vec4(position, 1);
+    gl_Position = camera_data.view_proj * push.render_matrix * vec4(position, 1);
     out_color = color;
 }

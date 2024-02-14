@@ -35,6 +35,12 @@ pub const MeshPushConstants = extern struct {
     render_matrix: math.Mat4 align(16),
 };
 
+pub const GpuCameraData = extern struct {
+    view: math.Mat4 align(16),
+    proj: math.Mat4 align(16),
+    view_proj: math.Mat4 align(16),
+};
+
 pub const Material = struct {
     pipeline: vk.Pipeline,
     pipeline_layout: vk.PipelineLayout,
@@ -53,6 +59,9 @@ pub const FrameData = struct {
 
     command_pool: vk.CommandPool,
     command_buffer: vk.CommandBuffer,
+
+    camera_buffer: AllocatedBuffer,
+    global_descriptor: vk.DescriptorSet,
 };
 
 const DeletionQueue = std.ArrayList(VulkanDeleter);
@@ -80,8 +89,10 @@ swapchain_image_views: []vk.ImageView,
 depth_format: vk.Format,
 depth_image: AllocatedImage,
 depth_image_view: vk.ImageView,
-
 render_pass: vk.RenderPass,
+
+descriptor_pool: vk.DescriptorPool,
+descriptor_set_layout: vk.DescriptorSetLayout,
 
 framebuffers: []vk.Framebuffer,
 frames: [frame_overlap]FrameData,
@@ -105,6 +116,7 @@ pub fn init(allocator: Allocator) !@This() {
     try vkCheck(c.vmaCreateAllocator(&vma_info, &vma));
 
     var deletion_queue = DeletionQueue.init(allocator);
+    var buffer_deletion_queue = BufferDeletionQueue.init(allocator);
     var image_deletion_queue = ImageDeletionQueue.init(allocator);
 
     const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
@@ -137,14 +149,27 @@ pub fn init(allocator: Allocator) !@This() {
         try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
     }
 
-    const frames = try createFrameData(device.handle, physical_device.graphics_family_index, &deletion_queue);
+    const descriptor_set_layout = try createDescriptorSetLayout(device.handle);
+    try deletion_queue.append(VulkanDeleter.make(descriptor_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
+
+    const descriptor_pool = try createDescriptorPool(device.handle);
+    try deletion_queue.append(VulkanDeleter.make(descriptor_pool, DeviceDispatch.destroyDescriptorPool));
+
+    const frames = try createFrameData(vma, device.handle, physical_device.graphics_family_index, descriptor_set_layout, descriptor_pool);
+    for (frames) |frame| {
+        try deletion_queue.append(VulkanDeleter.make(frame.command_pool, DeviceDispatch.destroyCommandPool));
+        try deletion_queue.append(VulkanDeleter.make(frame.render_fence, DeviceDispatch.destroyFence));
+        try deletion_queue.append(VulkanDeleter.make(frame.render_semaphore, DeviceDispatch.destroySemaphore));
+        try deletion_queue.append(VulkanDeleter.make(frame.present_semaphore, DeviceDispatch.destroySemaphore));
+        try buffer_deletion_queue.append(frame.camera_buffer);
+    }
 
     var engine: @This() = .{
         .allocator = allocator,
         .window = window,
         .deletion_queue = deletion_queue,
         .image_deletion_queue = image_deletion_queue,
-        .buffer_deletion_queue = BufferDeletionQueue.init(allocator),
+        .buffer_deletion_queue = buffer_deletion_queue,
         .meshes = std.StringHashMap(Mesh).init(allocator),
         .materials = std.StringHashMap(Material).init(allocator),
         .renderables = std.ArrayList(RenderObject).init(allocator),
@@ -161,6 +186,8 @@ pub fn init(allocator: Allocator) !@This() {
         .render_pass = render_pass,
         .framebuffers = framebuffers,
         .frames = frames,
+        .descriptor_set_layout = descriptor_set_layout,
+        .descriptor_pool = descriptor_pool,
     };
 
     try engine.initPipelines();
@@ -218,6 +245,56 @@ pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
 }
 
+fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
+    const pool_size = vk.DescriptorPoolSize{
+        .descriptor_count = 10,
+        .type = .uniform_buffer,
+    };
+
+    const pool_info = vk.DescriptorPoolCreateInfo{
+        .max_sets = 10,
+        .pool_size_count = 1,
+        .p_pool_sizes = @ptrCast(&pool_size),
+    };
+
+    return try vkd().createDescriptorPool(device, &pool_info, null);
+}
+
+fn createDescriptorSetLayout(device: vk.Device) !vk.DescriptorSetLayout {
+    const buffer_binding = vk.DescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptor_count = 1,
+        .descriptor_type = .uniform_buffer,
+        .stage_flags = .{ .vertex_bit = true },
+    };
+
+    const set_info = vk.DescriptorSetLayoutCreateInfo{
+        .binding_count = 1,
+        .p_bindings = @ptrCast(&buffer_binding),
+    };
+
+    return try vkd().createDescriptorSetLayout(device, &set_info, null);
+}
+
+fn createBuffer(vma: c.VmaAllocator, size: vk.DeviceSize, usage: vk.BufferUsageFlags, memory_usage: c.VmaMemoryUsage) !AllocatedBuffer {
+    const buffer_info = vk.BufferCreateInfo{
+        .size = size,
+        .usage = usage,
+        .sharing_mode = .exclusive,
+    };
+
+    const alloc_info = c.VmaAllocationCreateInfo{ .usage = memory_usage };
+
+    var buffer: c.VkBuffer = undefined;
+    var allocation: c.VmaAllocation = undefined;
+    try vkCheck(c.vmaCreateBuffer(vma, @ptrCast(&buffer_info), &alloc_info, &buffer, &allocation, null));
+
+    return .{
+        .buffer = c.vulkanCHandleToZig(vk.Buffer, buffer),
+        .allocation = allocation,
+    };
+}
+
 fn initScene(self: *@This()) !void {
     for (0..40) |x| {
         for (0..40) |y| {
@@ -271,6 +348,8 @@ fn initPipelines(self: *@This()) !void {
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
         .push_constant_range_count = 1,
         .p_push_constant_ranges = @ptrCast(&push_constant),
+        .set_layout_count = 1,
+        .p_set_layouts = @ptrCast(&self.descriptor_set_layout),
     };
 
     const pipeline_layout = try vkd().createPipelineLayout(self.device.handle, &pipeline_layout_info, null);
@@ -318,7 +397,13 @@ fn initPipelines(self: *@This()) !void {
     try createMaterial(&self.materials, pipeline.?, pipeline_layout, "defaultmesh");
 }
 
-fn createFrameData(device: vk.Device, graphics_family_index: u32, deletion_queue: *DeletionQueue) ![frame_overlap]FrameData {
+fn createFrameData(
+    vma: c.VmaAllocator,
+    device: vk.Device,
+    graphics_family_index: u32,
+    descriptor_set_layout: vk.DescriptorSetLayout,
+    descriptor_pool: vk.DescriptorPool,
+) ![frame_overlap]FrameData {
     const command_pool_info = vk_init.commandPoolCreateInfo(
         .{ .reset_command_buffer_bit = true },
         graphics_family_index,
@@ -332,14 +417,42 @@ fn createFrameData(device: vk.Device, graphics_family_index: u32, deletion_queue
         try vkd().allocateCommandBuffers(device, &command_buffer_info, @ptrCast(&ptr.command_buffer));
 
         const sync = try createSyncObjects(device);
-        try deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
-        try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
-        try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
-        try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
+
+        const buffer = try createBuffer(vma, @sizeOf(GpuCameraData), .{ .uniform_buffer_bit = true }, c.VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+        const alloc_info = vk.DescriptorSetAllocateInfo{
+            .descriptor_pool = descriptor_pool,
+            .descriptor_set_count = 1,
+            .p_set_layouts = @ptrCast(&descriptor_set_layout),
+        };
+
+        var descriptor_set: vk.DescriptorSet = .null_handle;
+        try vkd().allocateDescriptorSets(device, &alloc_info, @ptrCast(&descriptor_set));
+
+        const descriptor_buffer_info = vk.DescriptorBufferInfo{
+            .buffer = buffer.buffer,
+            .offset = 0,
+            .range = @sizeOf(GpuCameraData),
+        };
+
+        const set_write = vk.WriteDescriptorSet{
+            .dst_binding = 0,
+            .dst_set = descriptor_set,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .uniform_buffer,
+            .p_buffer_info = @ptrCast(&descriptor_buffer_info),
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+
+        vkd().updateDescriptorSets(device, 1, @ptrCast(&set_write), 0, null);
 
         ptr.render_semaphore = sync.render_semaphore;
         ptr.present_semaphore = sync.present_semaphore;
         ptr.render_fence = sync.render_fence;
+        ptr.camera_buffer = buffer;
+        ptr.global_descriptor = descriptor_set;
     }
 
     return frames;
@@ -374,34 +487,47 @@ fn currentFrame(self: *const @This()) FrameData {
     return self.frames[self.frame_number % frame_overlap];
 }
 
-fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) void {
+fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
     const camera_pos = math.Vec3{ 0, 6, 10 };
     const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, -1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
+    const camera_data = GpuCameraData{
+        .proj = projection,
+        .view = view,
+        .view_proj = math.mat.mul(&projection, &view),
+    };
+
+    const current_frame = self.currentFrame();
+
+    var data: ?*anyopaque = null;
+    try vkCheck(c.vmaMapMemory(self.vma, current_frame.camera_buffer.allocation, &data));
+
+    const ptr: *GpuCameraData = @ptrCast(@alignCast(data));
+    ptr.* = camera_data;
+
+    c.vmaUnmapMemory(self.vma, current_frame.camera_buffer.allocation);
+
     var last_mesh: ?*Mesh = null;
     var last_material: ?*Material = null;
     for (objects) |object| {
-        if (last_material == null) vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
-        if (last_mesh == null) vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
+        const bind_material = last_material == null or object.material != last_material.?;
+        const bind_mesh = last_mesh == null or object.mesh != last_mesh.?;
 
-        if (last_material != null and object.material != last_material.?) {
+        if (bind_material) {
             vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
+            vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 0, 1, @ptrCast(&current_frame.global_descriptor), 0, null);
             last_material = object.material;
         }
 
-        const model = object.transform_matrix;
-
-        const mesh_matrix = math.mat.mul(&projection, &math.mat.mul(&view, &model));
-
         const push = MeshPushConstants{
             .data = .{ 0, 0, 0, 0 },
-            .render_matrix = mesh_matrix,
+            .render_matrix = object.transform_matrix,
         };
 
         vkd().cmdPushConstants(cmd, object.material.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), &push);
 
-        if (last_mesh != null and object.mesh != last_mesh.?) {
+        if (bind_mesh) {
             vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
             last_mesh = object.mesh;
         }
@@ -581,7 +707,7 @@ fn draw(self: *@This()) !void {
     };
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
-    self.drawObjects(cmd, self.renderables.items);
+    try self.drawObjects(cmd, self.renderables.items);
 
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
