@@ -127,3 +127,18 @@ pub fn depthStencilCreateInfo(depth_test: bool, depth_write: bool, compare_op: v
         },
     };
 }
+
+pub fn commandPoolCreateInfo(flags: vk.CommandPoolCreateFlags, queue_family_index: u32) vk.CommandPoolCreateInfo {
+    return .{
+        .flags = flags,
+        .queue_family_index = queue_family_index,
+    };
+}
+
+pub fn commandBufferAllocateInfo(command_pool: vk.CommandPool) vk.CommandBufferAllocateInfo {
+    return .{
+        .command_pool = command_pool,
+        .command_buffer_count = 1,
+        .level = .primary,
+    };
+}

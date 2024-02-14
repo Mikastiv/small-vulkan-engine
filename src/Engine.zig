@@ -18,6 +18,7 @@ const log = std.log.scoped(.engine);
 const window_width = 1700;
 const window_height = 900;
 const window_title = "Vulkan Engine";
+const frame_overlap = 2;
 
 pub const AllocatedBuffer = struct {
     buffer: vk.Buffer,
@@ -45,6 +46,15 @@ pub const RenderObject = struct {
     transform_matrix: math.Mat4,
 };
 
+pub const FrameData = struct {
+    present_semaphore: vk.Semaphore,
+    render_semaphore: vk.Semaphore,
+    render_fence: vk.Fence,
+
+    command_pool: vk.CommandPool,
+    command_buffer: vk.CommandBuffer,
+};
+
 allocator: Allocator,
 vma: c.VmaAllocator,
 window: *Window,
@@ -64,15 +74,10 @@ swapchain_image_views: []vk.ImageView,
 depth_image: AllocatedImage,
 depth_image_view: vk.ImageView,
 
-command_pool: vk.CommandPool,
-main_command_buffer: vk.CommandBuffer,
-
 render_pass: vk.RenderPass,
 
 framebuffers: []vk.Framebuffer,
-render_fence: vk.Fence,
-present_semaphore: vk.Semaphore,
-render_semaphore: vk.Semaphore,
+frames: [frame_overlap]FrameData,
 
 renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
@@ -154,25 +159,24 @@ pub fn init(allocator: Allocator) !@This() {
         try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
     }
 
-    const command_pool_info = vk.CommandPoolCreateInfo{
-        .flags = .{ .reset_command_buffer_bit = true },
-        .queue_family_index = device.physical_device.graphics_family_index,
-    };
-    const command_pool = try vkd().createCommandPool(device.handle, &command_pool_info, null);
-    try deletion_queue.append(VulkanDeleter.make(command_pool, DeviceDispatch.destroyCommandPool));
+    const command_pool_info = vk_init.commandPoolCreateInfo(.{ .reset_command_buffer_bit = true }, device.physical_device.graphics_family_index);
+    var frames: [frame_overlap]FrameData = undefined;
+    for (&frames) |*ptr| {
+        ptr.command_pool = try vkd().createCommandPool(device.handle, &command_pool_info, null);
+        try deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
 
-    const command_buffer_info = vk.CommandBufferAllocateInfo{
-        .command_pool = command_pool,
-        .command_buffer_count = 1,
-        .level = .primary,
-    };
-    var command_buffer: vk.CommandBuffer = .null_handle;
-    try vkd().allocateCommandBuffers(device.handle, &command_buffer_info, @ptrCast(&command_buffer));
+        const command_buffer_info = vk_init.commandBufferAllocateInfo(ptr.command_pool);
+        try vkd().allocateCommandBuffers(device.handle, &command_buffer_info, @ptrCast(&ptr.command_buffer));
 
-    const sync = try createSyncObjects(device.handle);
-    try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
-    try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
-    try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
+        const sync = try createSyncObjects(device.handle);
+        try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
+        try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
+        try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
+
+        ptr.render_semaphore = sync.render_semaphore;
+        ptr.present_semaphore = sync.present_semaphore;
+        ptr.render_fence = sync.render_fence;
+    }
 
     const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.colored_triangle_frag);
     const triangle_mesh_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_mesh_vert);
@@ -291,16 +295,12 @@ pub fn init(allocator: Allocator) !@This() {
         .swapchain_image_views = image_views,
         .depth_image = depth_image,
         .depth_image_view = depth_image_view,
-        .command_pool = command_pool,
-        .main_command_buffer = command_buffer,
         .render_pass = render_pass,
         .framebuffers = framebuffers,
-        .render_fence = sync.render_fence,
-        .present_semaphore = sync.present_semaphore,
-        .render_semaphore = sync.render_semaphore,
         .meshes = meshes,
         .materials = materials,
         .renderables = renderables,
+        .frames = frames,
     };
 }
 
@@ -350,6 +350,10 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn currentFrame(self: *const @This()) FrameData {
+    return self.frames[self.frame_number % frame_overlap];
 }
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) void {
@@ -516,24 +520,26 @@ fn flushImageDeletionQueue(vma: c.VmaAllocator, entries: []const AllocatedImage)
 }
 
 fn draw(self: *@This()) !void {
-    var result = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&self.render_fence), vk.TRUE, std.time.ns_per_s);
+    const frame = self.currentFrame();
+
+    var result = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&frame.render_fence), vk.TRUE, std.time.ns_per_s);
     std.debug.assert(result == .success);
-    try vkd().resetFences(self.device.handle, 1, @ptrCast(&self.render_fence));
+    try vkd().resetFences(self.device.handle, 1, @ptrCast(&frame.render_fence));
 
     const next_image_result = try vkd().acquireNextImageKHR(
         self.device.handle,
         self.swapchain.handle,
         std.time.ns_per_s,
-        self.present_semaphore,
+        frame.present_semaphore,
         .null_handle,
     );
     std.debug.assert(next_image_result.result == .success);
 
     const image_index = next_image_result.image_index;
 
-    try vkd().resetCommandBuffer(self.main_command_buffer, .{});
+    try vkd().resetCommandBuffer(frame.command_buffer, .{});
 
-    const cmd = self.main_command_buffer;
+    const cmd = frame.command_buffer;
 
     const cmd_begin_info = vk.CommandBufferBeginInfo{
         .flags = .{ .one_time_submit_bit = true },
@@ -566,19 +572,19 @@ fn draw(self: *@This()) !void {
     const submit = vk.SubmitInfo{
         .p_wait_dst_stage_mask = @ptrCast(&wait_stage),
         .wait_semaphore_count = 1,
-        .p_wait_semaphores = @ptrCast(&self.present_semaphore),
+        .p_wait_semaphores = @ptrCast(&frame.present_semaphore),
         .signal_semaphore_count = 1,
-        .p_signal_semaphores = @ptrCast(&self.render_semaphore),
+        .p_signal_semaphores = @ptrCast(&frame.render_semaphore),
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast(&cmd),
     };
-    try vkd().queueSubmit(self.device.graphics_queue, 1, @ptrCast(&submit), self.render_fence);
+    try vkd().queueSubmit(self.device.graphics_queue, 1, @ptrCast(&submit), frame.render_fence);
 
     const present_info = vk.PresentInfoKHR{
         .swapchain_count = 1,
         .p_swapchains = @ptrCast(&self.swapchain.handle),
         .wait_semaphore_count = 1,
-        .p_wait_semaphores = @ptrCast(&self.render_semaphore),
+        .p_wait_semaphores = @ptrCast(&frame.render_semaphore),
         .p_image_indices = @ptrCast(&image_index),
     };
     result = try vkd().queuePresentKHR(self.device.graphics_queue, &present_info);
