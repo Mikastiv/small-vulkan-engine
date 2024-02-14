@@ -16,8 +16,8 @@
             .hash = "12205d4f90da23c4d6dc48b94b8327be3e898a23fe528babf0b223674e8977d8f473",
         },
         .vk_kickstart = .{
-            .url = "https://github.com/Mikastiv/vk-kickstart/archive/308783309842d8788ba539d6dce3fa8de75d58a2.tar.gz",
-            .hash = "122074b3a03193f08b515c800ee8f76309314b16a30c01f2f3c2fb5468d9acfe9ad9",
+            .url = "https://github.com/Mikastiv/vk-kickstart/archive/79b7fbccdc5cba0b53bf568c9ee14bea176ec654.tar.gz",
+            .hash = "1220ad0ef6013d6739bf849f268746f7c76871fc205096759f6fb0292e4aa8261791",
         },
     },
     .paths = .{
