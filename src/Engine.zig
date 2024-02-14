@@ -55,11 +55,13 @@ pub const FrameData = struct {
     command_buffer: vk.CommandBuffer,
 };
 
-allocator: Allocator,
-vma: c.VmaAllocator,
-window: *Window,
 frame_number: usize = 0,
 stop_rendering: bool = false,
+
+allocator: Allocator,
+window: *Window,
+
+vma: c.VmaAllocator,
 instance: vkk.Instance,
 device: vkk.Device,
 
@@ -71,6 +73,7 @@ surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
+depth_format: vk.Format,
 depth_image: AllocatedImage,
 depth_image_view: vk.ImageView,
 
@@ -90,218 +93,55 @@ pub fn init(allocator: Allocator) !@This() {
 
     const window = try Window.init(allocator, window_width, window_height, window_title);
 
-    const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
-    const surface = try window.createSurface(instance.handle);
-    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
-        .surface = surface,
-    });
-    const device = try vkk.Device.create(allocator, &physical_device, null);
-
-    const vma_info = c.VmaAllocatorCreateInfo{
-        .instance = c.vulkanZigHandleToC(c.VkInstance, instance.handle),
-        .physicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, physical_device.handle),
-        .device = c.vulkanZigHandleToC(c.VkDevice, device.handle),
-    };
-    var vma: c.VmaAllocator = undefined;
-    try vkCheck(c.vmaCreateAllocator(&vma_info, &vma));
-
-    var deletion_queue = std.ArrayList(VulkanDeleter).init(allocator);
-    var image_deletion_queue = std.ArrayList(AllocatedImage).init(allocator);
-
-    const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
-        .desired_extent = window.extent(),
-        .desired_present_modes = &.{
-            .fifo_khr,
-        },
-    });
-    try deletion_queue.append(VulkanDeleter.make(swapchain.handle, DeviceDispatch.destroySwapchainKHR));
-
-    const images = try swapchain.getImages(allocator);
-
-    const image_views = try swapchain.getImageViews(allocator, images);
-    for (image_views) |view| {
-        try deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
-    }
-
-    const depth_extent = vk.Extent3D{
-        .depth = 1,
-        .width = swapchain.extent.width,
-        .height = swapchain.extent.height,
-    };
-
-    const depth_format = vk.Format.d32_sfloat;
-
-    const depth_image_info = vk_init.imageCreateInfo(depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
-    const depth_image_alloc_info = c.VmaAllocationCreateInfo{
-        .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
-        .requiredFlags = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-    };
-
-    var d_image: c.VkImage = undefined;
-    var d_image_allocation: c.VmaAllocation = undefined;
-    try vkCheck(c.vmaCreateImage(vma, @ptrCast(&depth_image_info), &depth_image_alloc_info, &d_image, &d_image_allocation, null));
-
-    const depth_image = AllocatedImage{
-        .image = c.vulkanCHandleToZig(vk.Image, d_image),
-        .allocation = d_image_allocation,
-    };
-    try image_deletion_queue.append(depth_image);
-
-    const depth_image_view_info = vk_init.imageViewCreateInfo(depth_format, depth_image.image, .{ .depth_bit = true });
-    const depth_image_view = try vkd().createImageView(device.handle, &depth_image_view_info, null);
-    try deletion_queue.append(VulkanDeleter.make(depth_image_view, DeviceDispatch.destroyImageView));
-
-    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format, depth_format);
-    try deletion_queue.append(VulkanDeleter.make(render_pass, DeviceDispatch.destroyRenderPass));
-
-    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, image_views, depth_image_view);
-    for (framebuffers) |framebuffer| {
-        try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
-    }
-
-    const command_pool_info = vk_init.commandPoolCreateInfo(.{ .reset_command_buffer_bit = true }, device.physical_device.graphics_family_index);
-    var frames: [frame_overlap]FrameData = undefined;
-    for (&frames) |*ptr| {
-        ptr.command_pool = try vkd().createCommandPool(device.handle, &command_pool_info, null);
-        try deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
-
-        const command_buffer_info = vk_init.commandBufferAllocateInfo(ptr.command_pool);
-        try vkd().allocateCommandBuffers(device.handle, &command_buffer_info, @ptrCast(&ptr.command_buffer));
-
-        const sync = try createSyncObjects(device.handle);
-        try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
-        try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
-        try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
-
-        ptr.render_semaphore = sync.render_semaphore;
-        ptr.present_semaphore = sync.present_semaphore;
-        ptr.render_fence = sync.render_fence;
-    }
-
-    const triangle_shader_frag = try createShaderModule(device.handle, &Shaders.colored_triangle_frag);
-    const triangle_mesh_shader_vert = try createShaderModule(device.handle, &Shaders.triangle_mesh_vert);
-
-    var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(allocator);
-    defer shader_stages.deinit();
-
-    const push_constant = vk.PushConstantRange{
-        .offset = 0,
-        .size = @sizeOf(MeshPushConstants),
-        .stage_flags = .{ .vertex_bit = true },
-    };
-    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
-        .push_constant_range_count = 1,
-        .p_push_constant_ranges = @ptrCast(&push_constant),
-    };
-
-    const pipeline_layout = try vkd().createPipelineLayout(device.handle, &pipeline_layout_info, null);
-    try deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
-
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
-    var pipeline_builder = PipelineBuilder{
-        .shader_stages = shader_stages,
-        .vertex_input_info = vk.PipelineVertexInputStateCreateInfo{},
-        .input_assembly = vk_init.inputAssemblyCreateInfo(.triangle_list),
-        .viewport = .{
-            .x = 0,
-            .y = 0,
-            .width = @floatFromInt(swapchain.extent.width),
-            .height = @floatFromInt(swapchain.extent.height),
-            .min_depth = 0,
-            .max_depth = 1,
-        },
-        .scissor = .{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = swapchain.extent,
-        },
-        .rasterizer = vk_init.rasterizationStateCreateInfo(.fill),
-        .multisampling = vk_init.multisamplingStateCreateInfo(),
-        .color_blend_attachment = vk_init.colorBlendAttachmentState(),
-        .pipeline_layout = pipeline_layout,
-        .depth_stencil = vk_init.depthStencilCreateInfo(true, true, .less),
-    };
-
-    const vertex_description = try Mesh.Vertex.getVertexDescription(allocator);
-    defer {
-        vertex_description.bindings.deinit();
-        vertex_description.attributes.deinit();
-    }
-    pipeline_builder.vertex_input_info.vertex_binding_description_count = @intCast(vertex_description.bindings.items.len);
-    pipeline_builder.vertex_input_info.p_vertex_binding_descriptions = vertex_description.bindings.items.ptr;
-    pipeline_builder.vertex_input_info.vertex_attribute_description_count = @intCast(vertex_description.attributes.items.len);
-    pipeline_builder.vertex_input_info.p_vertex_attribute_descriptions = vertex_description.attributes.items.ptr;
-
-    const pipeline = pipeline_builder.buildPipeline(device.handle, render_pass);
-    if (pipeline == null) return error.PipelineCreationFailed;
-    try deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
-
-    vkd().destroyShaderModule(device.handle, triangle_shader_frag, null);
-    vkd().destroyShaderModule(device.handle, triangle_mesh_shader_vert, null);
-
-    var buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator);
-
-    var meshes = std.StringHashMap(Mesh).init(allocator);
-    var materials = std.StringHashMap(Material).init(allocator);
-
-    try createMaterial(&materials, pipeline.?, pipeline_layout, "defaultmesh");
-
-    const triangle_vertices = try makeTriangle(allocator);
-    var mesh = try uploadMesh(vma, triangle_vertices, &buffer_deletion_queue);
-    try meshes.put("triangle", mesh);
-    const monkey_vertices = try Mesh.loadFromFile(allocator, "assets/monkey_smooth.obj");
-    mesh = try uploadMesh(vma, monkey_vertices, &buffer_deletion_queue);
-    try meshes.put("monkey", mesh);
-
-    var renderables = std.ArrayList(RenderObject).init(allocator);
-
-    const monkey = RenderObject{
-        .material = materials.getPtr("defaultmesh").?,
-        .mesh = meshes.getPtr("monkey").?,
-        .transform_matrix = math.mat.identity(math.Mat4),
-    };
-    try renderables.append(monkey);
-
-    for (0..40) |x| {
-        for (0..40) |y| {
-            var x_pos: f32 = @floatFromInt(x);
-            x_pos -= 20;
-            var y_pos: f32 = @floatFromInt(y);
-            y_pos -= 20;
-            var transform = math.mat.identity(math.Mat4);
-            transform = math.mat.translate(&transform, .{ x_pos, 0, y_pos });
-            transform = math.mat.scale(&transform, .{ 0.2, 0.2, 0.2 });
-            const tri = RenderObject{
-                .material = materials.getPtr("defaultmesh").?,
-                .mesh = meshes.getPtr("triangle").?,
-                .transform_matrix = transform,
-            };
-            try renderables.append(tri);
-        }
-    }
-
-    return .{
+    var engine: @This() = .{
         .allocator = allocator,
-        .vma = vma,
         .window = window,
-        .instance = instance,
-        .device = device,
-        .surface = surface,
-        .deletion_queue = deletion_queue,
-        .buffer_deletion_queue = buffer_deletion_queue,
-        .image_deletion_queue = image_deletion_queue,
-        .swapchain = swapchain,
-        .swapchain_images = images,
-        .swapchain_image_views = image_views,
-        .depth_image = depth_image,
-        .depth_image_view = depth_image_view,
-        .render_pass = render_pass,
-        .framebuffers = framebuffers,
-        .meshes = meshes,
-        .materials = materials,
-        .renderables = renderables,
-        .frames = frames,
+        .deletion_queue = std.ArrayList(VulkanDeleter).init(allocator),
+        .image_deletion_queue = std.ArrayList(AllocatedImage).init(allocator),
+        .buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator),
+        .meshes = std.StringHashMap(Mesh).init(allocator),
+        .materials = std.StringHashMap(Material).init(allocator),
+        .renderables = std.ArrayList(RenderObject).init(allocator),
+
+        .vma = undefined,
+        .instance = undefined,
+        .device = undefined,
+        .surface = undefined,
+        .swapchain = undefined,
+        .swapchain_images = undefined,
+        .swapchain_image_views = undefined,
+        .depth_format = undefined,
+        .depth_image = undefined,
+        .depth_image_view = undefined,
+        .render_pass = undefined,
+        .framebuffers = undefined,
+        .frames = undefined,
     };
+
+    try engine.initVulkan();
+    try engine.initSwapchain();
+
+    engine.render_pass = try defaultRenderPass(engine.device.handle, engine.swapchain.image_format, engine.depth_format);
+    try engine.deletion_queue.append(VulkanDeleter.make(engine.render_pass, DeviceDispatch.destroyRenderPass));
+
+    engine.framebuffers = try createFramebuffers(
+        engine.allocator,
+        engine.device.handle,
+        engine.render_pass,
+        engine.swapchain.extent,
+        engine.swapchain_image_views,
+        engine.depth_image_view,
+    );
+    for (engine.framebuffers) |framebuffer| {
+        try engine.deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
+    }
+
+    try engine.initFrameData();
+    try engine.initPipelines();
+    try engine.initMeshes();
+    try engine.initScene();
+
+    return engine;
 }
 
 pub fn deinit(self: *@This()) void {
@@ -350,6 +190,192 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn initScene(self: *@This()) !void {
+    for (0..40) |x| {
+        for (0..40) |y| {
+            var x_pos: f32 = @floatFromInt(x);
+            x_pos -= 20;
+            var y_pos: f32 = @floatFromInt(y);
+            y_pos -= 20;
+            var transform = math.mat.identity(math.Mat4);
+            transform = math.mat.translate(&transform, .{ x_pos, 0, y_pos });
+            transform = math.mat.scale(&transform, .{ 0.2, 0.2, 0.2 });
+            const tri = RenderObject{
+                .material = self.materials.getPtr("defaultmesh").?,
+                .mesh = self.meshes.getPtr("triangle").?,
+                .transform_matrix = transform,
+            };
+            try self.renderables.append(tri);
+        }
+    }
+}
+
+fn initMeshes(self: *@This()) !void {
+    const triangle_vertices = try makeTriangle(self.allocator);
+    var mesh = try uploadMesh(self.vma, triangle_vertices, &self.buffer_deletion_queue);
+    try self.meshes.put("triangle", mesh);
+    const monkey_vertices = try Mesh.loadFromFile(self.allocator, "assets/monkey_smooth.obj");
+    mesh = try uploadMesh(self.vma, monkey_vertices, &self.buffer_deletion_queue);
+    try self.meshes.put("monkey", mesh);
+
+    const monkey = RenderObject{
+        .material = self.materials.getPtr("defaultmesh").?,
+        .mesh = self.meshes.getPtr("monkey").?,
+        .transform_matrix = math.mat.identity(math.Mat4),
+    };
+    try self.renderables.append(monkey);
+}
+
+fn initPipelines(self: *@This()) !void {
+    const triangle_shader_frag = try createShaderModule(self.device.handle, &Shaders.colored_triangle_frag);
+    const triangle_mesh_shader_vert = try createShaderModule(self.device.handle, &Shaders.triangle_mesh_vert);
+    defer vkd().destroyShaderModule(self.device.handle, triangle_shader_frag, null);
+    defer vkd().destroyShaderModule(self.device.handle, triangle_mesh_shader_vert, null);
+
+    var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(self.allocator);
+    defer shader_stages.deinit();
+
+    const push_constant = vk.PushConstantRange{
+        .offset = 0,
+        .size = @sizeOf(MeshPushConstants),
+        .stage_flags = .{ .vertex_bit = true },
+    };
+    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = @ptrCast(&push_constant),
+    };
+
+    const pipeline_layout = try vkd().createPipelineLayout(self.device.handle, &pipeline_layout_info, null);
+    try self.deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
+
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
+    var pipeline_builder = PipelineBuilder{
+        .shader_stages = shader_stages,
+        .vertex_input_info = vk.PipelineVertexInputStateCreateInfo{},
+        .input_assembly = vk_init.inputAssemblyCreateInfo(.triangle_list),
+        .viewport = .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(self.swapchain.extent.width),
+            .height = @floatFromInt(self.swapchain.extent.height),
+            .min_depth = 0,
+            .max_depth = 1,
+        },
+        .scissor = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain.extent,
+        },
+        .rasterizer = vk_init.rasterizationStateCreateInfo(.fill),
+        .multisampling = vk_init.multisamplingStateCreateInfo(),
+        .color_blend_attachment = vk_init.colorBlendAttachmentState(),
+        .pipeline_layout = pipeline_layout,
+        .depth_stencil = vk_init.depthStencilCreateInfo(true, true, .less),
+    };
+
+    const vertex_description = try Mesh.Vertex.getVertexDescription(self.allocator);
+    defer {
+        vertex_description.bindings.deinit();
+        vertex_description.attributes.deinit();
+    }
+    pipeline_builder.vertex_input_info.vertex_binding_description_count = @intCast(vertex_description.bindings.items.len);
+    pipeline_builder.vertex_input_info.p_vertex_binding_descriptions = vertex_description.bindings.items.ptr;
+    pipeline_builder.vertex_input_info.vertex_attribute_description_count = @intCast(vertex_description.attributes.items.len);
+    pipeline_builder.vertex_input_info.p_vertex_attribute_descriptions = vertex_description.attributes.items.ptr;
+
+    const pipeline = pipeline_builder.buildPipeline(self.device.handle, self.render_pass);
+    if (pipeline == null) return error.PipelineCreationFailed;
+    try self.deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
+
+    try createMaterial(&self.materials, pipeline.?, pipeline_layout, "defaultmesh");
+}
+
+fn initFrameData(self: *@This()) !void {
+    const command_pool_info = vk_init.commandPoolCreateInfo(
+        .{ .reset_command_buffer_bit = true },
+        self.device.physical_device.graphics_family_index,
+    );
+    for (&self.frames) |*ptr| {
+        ptr.command_pool = try vkd().createCommandPool(self.device.handle, &command_pool_info, null);
+        try self.deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
+
+        const command_buffer_info = vk_init.commandBufferAllocateInfo(ptr.command_pool);
+        try vkd().allocateCommandBuffers(self.device.handle, &command_buffer_info, @ptrCast(&ptr.command_buffer));
+
+        const sync = try createSyncObjects(self.device.handle);
+        try self.deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
+        try self.deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
+        try self.deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
+
+        ptr.render_semaphore = sync.render_semaphore;
+        ptr.present_semaphore = sync.present_semaphore;
+        ptr.render_fence = sync.render_fence;
+    }
+}
+
+fn initSwapchain(self: *@This()) !void {
+    self.swapchain = try vkk.Swapchain.create(self.allocator, &self.device, self.surface, .{
+        .desired_extent = self.window.extent(),
+        .desired_present_modes = &.{
+            .fifo_khr,
+        },
+    });
+    try self.deletion_queue.append(VulkanDeleter.make(self.swapchain.handle, DeviceDispatch.destroySwapchainKHR));
+
+    self.swapchain_images = try self.swapchain.getImages(self.allocator);
+
+    self.swapchain_image_views = try self.swapchain.getImageViews(self.allocator, self.swapchain_images);
+    for (self.swapchain_image_views) |view| {
+        try self.deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
+    }
+
+    const depth_extent = vk.Extent3D{
+        .depth = 1,
+        .width = self.swapchain.extent.width,
+        .height = self.swapchain.extent.height,
+    };
+
+    self.depth_format = vk.Format.d32_sfloat;
+
+    const depth_image_info = vk_init.imageCreateInfo(self.depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
+    const depth_image_alloc_info = c.VmaAllocationCreateInfo{
+        .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
+        .requiredFlags = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    };
+
+    var d_image: c.VkImage = undefined;
+    var d_image_allocation: c.VmaAllocation = undefined;
+    try vkCheck(c.vmaCreateImage(self.vma, @ptrCast(&depth_image_info), &depth_image_alloc_info, &d_image, &d_image_allocation, null));
+
+    self.depth_image = AllocatedImage{
+        .image = c.vulkanCHandleToZig(vk.Image, d_image),
+        .allocation = d_image_allocation,
+    };
+    try self.image_deletion_queue.append(self.depth_image);
+
+    const depth_image_view_info = vk_init.imageViewCreateInfo(self.depth_format, self.depth_image.image, .{ .depth_bit = true });
+    self.depth_image_view = try vkd().createImageView(self.device.handle, &depth_image_view_info, null);
+    try self.deletion_queue.append(VulkanDeleter.make(self.depth_image_view, DeviceDispatch.destroyImageView));
+}
+
+fn initVulkan(self: *@This()) !void {
+    self.instance = try vkk.Instance.create(self.allocator, c.glfwGetInstanceProcAddress, .{});
+    self.surface = try self.window.createSurface(self.instance.handle);
+
+    const physical_device = try vkk.PhysicalDevice.select(self.allocator, &self.instance, .{
+        .surface = self.surface,
+    });
+
+    self.device = try vkk.Device.create(self.allocator, &physical_device, null);
+
+    const vma_info = c.VmaAllocatorCreateInfo{
+        .instance = c.vulkanZigHandleToC(c.VkInstance, self.instance.handle),
+        .physicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, physical_device.handle),
+        .device = c.vulkanZigHandleToC(c.VkDevice, self.device.handle),
+    };
+    try vkCheck(c.vmaCreateAllocator(&vma_info, &self.vma));
 }
 
 fn currentFrame(self: *const @This()) FrameData {
