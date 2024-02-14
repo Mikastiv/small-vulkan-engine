@@ -55,6 +55,10 @@ pub const FrameData = struct {
     command_buffer: vk.CommandBuffer,
 };
 
+const DeletionQueue = std.ArrayList(VulkanDeleter);
+const BufferDeletionQueue = std.ArrayList(AllocatedBuffer);
+const ImageDeletionQueue = std.ArrayList(AllocatedImage);
+
 frame_number: usize = 0,
 stop_rendering: bool = false,
 
@@ -65,9 +69,9 @@ vma: c.VmaAllocator,
 instance: vkk.Instance,
 device: vkk.Device,
 
-deletion_queue: std.ArrayList(VulkanDeleter),
-buffer_deletion_queue: std.ArrayList(AllocatedBuffer),
-image_deletion_queue: std.ArrayList(AllocatedImage),
+deletion_queue: DeletionQueue,
+buffer_deletion_queue: BufferDeletionQueue,
+image_deletion_queue: ImageDeletionQueue,
 
 surface: vk.SurfaceKHR,
 swapchain: vkk.Swapchain,
@@ -92,51 +96,73 @@ pub fn init(allocator: Allocator) !@This() {
     _ = c.glfwSetErrorCallback(errorCallback);
 
     const window = try Window.init(allocator, window_width, window_height, window_title);
+    const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
+    const surface = try window.createSurface(instance.handle);
+    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{ .surface = surface });
+    const device = try vkk.Device.create(allocator, &physical_device, null);
+    const vma_info = vk_init.vmaAllocatorCreateInfo(instance.handle, physical_device.handle, device.handle);
+    var vma: c.VmaAllocator = undefined;
+    try vkCheck(c.vmaCreateAllocator(&vma_info, &vma));
+
+    var deletion_queue = DeletionQueue.init(allocator);
+    var image_deletion_queue = ImageDeletionQueue.init(allocator);
+
+    const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
+        .desired_extent = window.extent(),
+        .desired_present_modes = &.{
+            .fifo_khr,
+        },
+    });
+    try deletion_queue.append(VulkanDeleter.make(swapchain.handle, DeviceDispatch.destroySwapchainKHR));
+
+    const swapchain_images = try swapchain.getImages(allocator);
+    const swapchain_image_views = try swapchain.getImageViews(allocator, swapchain_images);
+    for (swapchain_image_views) |view| {
+        try deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
+    }
+
+    const depth_format: vk.Format = .d32_sfloat;
+    const depth_image = try createDepthImage(vma, depth_format, swapchain.extent);
+    try image_deletion_queue.append(depth_image);
+
+    const depth_image_view_info = vk_init.imageViewCreateInfo(depth_format, depth_image.image, .{ .depth_bit = true });
+    const depth_image_view = try vkd().createImageView(device.handle, &depth_image_view_info, null);
+    try deletion_queue.append(VulkanDeleter.make(depth_image_view, DeviceDispatch.destroyImageView));
+
+    const render_pass = try defaultRenderPass(device.handle, swapchain.image_format, depth_format);
+    try deletion_queue.append(VulkanDeleter.make(render_pass, DeviceDispatch.destroyRenderPass));
+
+    const framebuffers = try createFramebuffers(allocator, device.handle, render_pass, swapchain.extent, swapchain_image_views, depth_image_view);
+    for (framebuffers) |framebuffer| {
+        try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
+    }
+
+    const frames = try createFrameData(device.handle, physical_device.graphics_family_index, &deletion_queue);
 
     var engine: @This() = .{
         .allocator = allocator,
         .window = window,
-        .deletion_queue = std.ArrayList(VulkanDeleter).init(allocator),
-        .image_deletion_queue = std.ArrayList(AllocatedImage).init(allocator),
-        .buffer_deletion_queue = std.ArrayList(AllocatedBuffer).init(allocator),
+        .deletion_queue = deletion_queue,
+        .image_deletion_queue = image_deletion_queue,
+        .buffer_deletion_queue = BufferDeletionQueue.init(allocator),
         .meshes = std.StringHashMap(Mesh).init(allocator),
         .materials = std.StringHashMap(Material).init(allocator),
         .renderables = std.ArrayList(RenderObject).init(allocator),
-
-        .vma = undefined,
-        .instance = undefined,
-        .device = undefined,
-        .surface = undefined,
-        .swapchain = undefined,
-        .swapchain_images = undefined,
-        .swapchain_image_views = undefined,
-        .depth_format = undefined,
-        .depth_image = undefined,
-        .depth_image_view = undefined,
-        .render_pass = undefined,
-        .framebuffers = undefined,
-        .frames = undefined,
+        .instance = instance,
+        .surface = surface,
+        .device = device,
+        .vma = vma,
+        .swapchain = swapchain,
+        .swapchain_images = swapchain_images,
+        .swapchain_image_views = swapchain_image_views,
+        .depth_format = depth_format,
+        .depth_image = depth_image,
+        .depth_image_view = depth_image_view,
+        .render_pass = render_pass,
+        .framebuffers = framebuffers,
+        .frames = frames,
     };
 
-    try engine.initVulkan();
-    try engine.initSwapchain();
-
-    engine.render_pass = try defaultRenderPass(engine.device.handle, engine.swapchain.image_format, engine.depth_format);
-    try engine.deletion_queue.append(VulkanDeleter.make(engine.render_pass, DeviceDispatch.destroyRenderPass));
-
-    engine.framebuffers = try createFramebuffers(
-        engine.allocator,
-        engine.device.handle,
-        engine.render_pass,
-        engine.swapchain.extent,
-        engine.swapchain_image_views,
-        engine.depth_image_view,
-    );
-    for (engine.framebuffers) |framebuffer| {
-        try engine.deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
-    }
-
-    try engine.initFrameData();
     try engine.initPipelines();
     try engine.initMeshes();
     try engine.initScene();
@@ -292,54 +318,41 @@ fn initPipelines(self: *@This()) !void {
     try createMaterial(&self.materials, pipeline.?, pipeline_layout, "defaultmesh");
 }
 
-fn initFrameData(self: *@This()) !void {
+fn createFrameData(device: vk.Device, graphics_family_index: u32, deletion_queue: *DeletionQueue) ![frame_overlap]FrameData {
     const command_pool_info = vk_init.commandPoolCreateInfo(
         .{ .reset_command_buffer_bit = true },
-        self.device.physical_device.graphics_family_index,
+        graphics_family_index,
     );
-    for (&self.frames) |*ptr| {
-        ptr.command_pool = try vkd().createCommandPool(self.device.handle, &command_pool_info, null);
-        try self.deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
+
+    var frames: [frame_overlap]FrameData = undefined;
+    for (&frames) |*ptr| {
+        ptr.command_pool = try vkd().createCommandPool(device, &command_pool_info, null);
 
         const command_buffer_info = vk_init.commandBufferAllocateInfo(ptr.command_pool);
-        try vkd().allocateCommandBuffers(self.device.handle, &command_buffer_info, @ptrCast(&ptr.command_buffer));
+        try vkd().allocateCommandBuffers(device, &command_buffer_info, @ptrCast(&ptr.command_buffer));
 
-        const sync = try createSyncObjects(self.device.handle);
-        try self.deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
-        try self.deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
-        try self.deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
+        const sync = try createSyncObjects(device);
+        try deletion_queue.append(VulkanDeleter.make(ptr.command_pool, DeviceDispatch.destroyCommandPool));
+        try deletion_queue.append(VulkanDeleter.make(sync.render_fence, DeviceDispatch.destroyFence));
+        try deletion_queue.append(VulkanDeleter.make(sync.render_semaphore, DeviceDispatch.destroySemaphore));
+        try deletion_queue.append(VulkanDeleter.make(sync.present_semaphore, DeviceDispatch.destroySemaphore));
 
         ptr.render_semaphore = sync.render_semaphore;
         ptr.present_semaphore = sync.present_semaphore;
         ptr.render_fence = sync.render_fence;
     }
+
+    return frames;
 }
 
-fn initSwapchain(self: *@This()) !void {
-    self.swapchain = try vkk.Swapchain.create(self.allocator, &self.device, self.surface, .{
-        .desired_extent = self.window.extent(),
-        .desired_present_modes = &.{
-            .fifo_khr,
-        },
-    });
-    try self.deletion_queue.append(VulkanDeleter.make(self.swapchain.handle, DeviceDispatch.destroySwapchainKHR));
-
-    self.swapchain_images = try self.swapchain.getImages(self.allocator);
-
-    self.swapchain_image_views = try self.swapchain.getImageViews(self.allocator, self.swapchain_images);
-    for (self.swapchain_image_views) |view| {
-        try self.deletion_queue.append(VulkanDeleter.make(view, DeviceDispatch.destroyImageView));
-    }
-
+fn createDepthImage(vma: c.VmaAllocator, depth_format: vk.Format, extent: vk.Extent2D) !AllocatedImage {
     const depth_extent = vk.Extent3D{
         .depth = 1,
-        .width = self.swapchain.extent.width,
-        .height = self.swapchain.extent.height,
+        .width = extent.width,
+        .height = extent.height,
     };
 
-    self.depth_format = vk.Format.d32_sfloat;
-
-    const depth_image_info = vk_init.imageCreateInfo(self.depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
+    const depth_image_info = vk_init.imageCreateInfo(depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
     const depth_image_alloc_info = c.VmaAllocationCreateInfo{
         .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
         .requiredFlags = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -347,35 +360,14 @@ fn initSwapchain(self: *@This()) !void {
 
     var d_image: c.VkImage = undefined;
     var d_image_allocation: c.VmaAllocation = undefined;
-    try vkCheck(c.vmaCreateImage(self.vma, @ptrCast(&depth_image_info), &depth_image_alloc_info, &d_image, &d_image_allocation, null));
+    try vkCheck(c.vmaCreateImage(vma, @ptrCast(&depth_image_info), &depth_image_alloc_info, &d_image, &d_image_allocation, null));
 
-    self.depth_image = AllocatedImage{
+    const depth_image = AllocatedImage{
         .image = c.vulkanCHandleToZig(vk.Image, d_image),
         .allocation = d_image_allocation,
     };
-    try self.image_deletion_queue.append(self.depth_image);
 
-    const depth_image_view_info = vk_init.imageViewCreateInfo(self.depth_format, self.depth_image.image, .{ .depth_bit = true });
-    self.depth_image_view = try vkd().createImageView(self.device.handle, &depth_image_view_info, null);
-    try self.deletion_queue.append(VulkanDeleter.make(self.depth_image_view, DeviceDispatch.destroyImageView));
-}
-
-fn initVulkan(self: *@This()) !void {
-    self.instance = try vkk.Instance.create(self.allocator, c.glfwGetInstanceProcAddress, .{});
-    self.surface = try self.window.createSurface(self.instance.handle);
-
-    const physical_device = try vkk.PhysicalDevice.select(self.allocator, &self.instance, .{
-        .surface = self.surface,
-    });
-
-    self.device = try vkk.Device.create(self.allocator, &physical_device, null);
-
-    const vma_info = c.VmaAllocatorCreateInfo{
-        .instance = c.vulkanZigHandleToC(c.VkInstance, self.instance.handle),
-        .physicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, physical_device.handle),
-        .device = c.vulkanZigHandleToC(c.VkDevice, self.device.handle),
-    };
-    try vkCheck(c.vmaCreateAllocator(&vma_info, &self.vma));
+    return depth_image;
 }
 
 fn currentFrame(self: *const @This()) FrameData {
@@ -449,7 +441,7 @@ fn makeTriangle(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
 fn uploadMesh(
     vma: c.VmaAllocator,
     vertices: std.ArrayList(Mesh.Vertex),
-    deletion_queue: *std.ArrayList(AllocatedBuffer),
+    deletion_queue: *BufferDeletionQueue,
 ) !Mesh {
     const buffer = try createMeshBuffer(vma, vertices.items.len * @sizeOf(Mesh.Vertex), deletion_queue);
 
@@ -470,7 +462,7 @@ fn uploadMesh(
 fn createMeshBuffer(
     vma: c.VmaAllocator,
     size: vk.DeviceSize,
-    deletion_queue: *std.ArrayList(AllocatedBuffer),
+    deletion_queue: *BufferDeletionQueue,
 ) !AllocatedBuffer {
     const buffer_info = vk.BufferCreateInfo{
         .size = size,
