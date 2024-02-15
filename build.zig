@@ -18,6 +18,10 @@ pub fn build(b: *std.Build) void {
         .enable_validation = if (optimize == .Debug) true else false,
     });
 
+    const vma_zig = b.dependency("vma_zig", .{
+        .registry = xml_path,
+    });
+
     const glfw = b.dependency("glfw", .{
         .target = target,
         .optimize = .ReleaseFast,
@@ -33,10 +37,6 @@ pub fn build(b: *std.Build) void {
     shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
 
     const wf = b.addWriteFiles();
-    const vma = wf.add("vk_mem_alloc.cpp",
-        \\#define VMA_IMPLEMENTATION
-        \\#include "vk_mem_alloc.h"
-    );
     const stb_image = wf.add("stb_image.c",
         \\#define STB_IMAGE_IMPLEMENTATION
         \\#include "stb_image.h"
@@ -78,19 +78,18 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addImport("vk-kickstart", vk_kickstart.module("vk-kickstart"));
     exe.root_module.addImport("vulkan-zig", vkzig.module("vulkan-zig"));
+    exe.root_module.addImport("vma-zig", vma_zig.module("vma-zig"));
     exe.root_module.addImport("shaders", shaders.getModule());
     exe.linkLibCpp();
     exe.linkLibrary(glfw);
     exe.linkLibrary(cimgui);
-    exe.linkSystemLibrary(vulkan_lib);
     exe.addIncludePath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "include" }) });
     exe.addLibraryPath(.{ .path = b.pathJoin(&.{ vulkan_sdk, "lib" }) });
+    exe.linkSystemLibrary(vulkan_lib);
     exe.addIncludePath(.{ .path = "lib/cimgui" });
     exe.addIncludePath(.{ .path = "lib/cimgui/imgui" });
     exe.addIncludePath(.{ .path = "lib/stb_image" });
-    exe.addIncludePath(.{ .path = "lib/vma" });
     exe.addIncludePath(.{ .path = "lib/tinyobj" });
-    exe.addCSourceFile(.{ .file = vma });
     exe.addCSourceFile(.{ .file = stb_image });
     exe.addCSourceFile(.{ .file = tinyobj });
 

@@ -11,13 +11,13 @@
             .url = "https://pkg.machengine.org/glfw/586e14a964740747ca7913fc17096b3bb3d52409.tar.gz",
             .hash = "122091debcee20ff2aaf983a9e8c215d4e50cc6caf44975442218901ea728e7dd79a",
         },
-        .zgltf = .{
-            .url = "https://github.com/kooparse/zgltf/archive/79de7be54e57235496fc3277708991fc857ef7e7.tar.gz",
-            .hash = "12205d4f90da23c4d6dc48b94b8327be3e898a23fe528babf0b223674e8977d8f473",
-        },
         .vk_kickstart = .{
-            .url = "https://github.com/Mikastiv/vk-kickstart/archive/79b7fbccdc5cba0b53bf568c9ee14bea176ec654.tar.gz",
-            .hash = "1220ad0ef6013d6739bf849f268746f7c76871fc205096759f6fb0292e4aa8261791",
+            .url = "https://github.com/Mikastiv/vk-kickstart/archive/621155fc2a33b271321ceca7da02120841e58cf6.tar.gz",
+            .hash = "122036a12997308ea3367b3709642fa731ad1a110e45b7496d2f04d2e25cd780b7ba",
+        },
+        .vma_zig = .{
+            .url = "https://github.com/Mikastiv/vma-zig/archive/a26a2240216364942ed33e3119c0585fb23be534.tar.gz",
+            .hash = "1220c176b940c9420398efca9cd30bb52677711f257773796d1a577295680a8e9f41",
         },
     },
     .paths = .{

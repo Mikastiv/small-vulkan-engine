@@ -143,11 +143,3 @@ pub fn commandBufferAllocateInfo(command_pool: vk.CommandPool) vk.CommandBufferA
         .level = .primary,
     };
 }
-
-pub fn vmaAllocatorCreateInfo(instance: vk.Instance, physical_device: vk.PhysicalDevice, device: vk.Device) c.VmaAllocatorCreateInfo {
-    return .{
-        .instance = c.vulkanZigHandleToC(c.VkInstance, instance),
-        .physicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, physical_device),
-        .device = c.vulkanZigHandleToC(c.VkDevice, device),
-    };
-}
