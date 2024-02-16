@@ -530,11 +530,9 @@ pub const mat = struct {
 
         const h = @tan(fovy / 2.0);
 
-        const y = -1; // In Vulkan -Y is up
-
         return .{
             .{ 1 / (aspect * h), 0, 0, 0 },
-            .{ 0, y / h, 0, 0 },
+            .{ 0, 1 / h, 0, 0 },
             .{ 0, 0, far / far - near, 1 },
             .{ 0, 0, -(far * near) / far - near, 0 },
         };

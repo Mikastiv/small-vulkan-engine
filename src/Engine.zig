@@ -227,7 +227,10 @@ pub fn deinit(self: *@This()) void {
 }
 
 pub fn run(self: *@This()) !void {
+    var timer = try std.time.Timer.start();
     while (!self.window.shouldClose()) {
+        const dt_ns = timer.lap();
+        const dt: f32 = @as(f32, @floatFromInt(dt_ns)) / std.time.ns_per_s;
         c.glfwPollEvents();
 
         if (self.window.minimized) {
@@ -241,12 +244,21 @@ pub fn run(self: *@This()) !void {
             continue;
         }
 
+        try self.update(dt);
         try self.draw();
     }
 }
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn update(self: *@This(), dt: f32) !void {
+    for (self.renderables.items) |*object| {
+        var transform = object.transform_matrix;
+        transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
+        object.transform_matrix = transform;
+    }
 }
 
 fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
@@ -334,7 +346,7 @@ fn initMeshes(self: *@This()) !void {
     const monkey = RenderObject{
         .material = self.materials.getPtr("defaultmesh").?,
         .mesh = self.meshes.getPtr("monkey").?,
-        .transform_matrix = math.mat.identity(math.Mat4),
+        .transform_matrix = math.mat.translation(.{ 5, 5, 5 }),
     };
     try self.renderables.append(monkey);
 }
@@ -501,7 +513,7 @@ fn currentFrame(self: *const @This()) FrameData {
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
     const camera_pos = math.Vec3{ 0, 6, 10 };
-    const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, -1, 0 });
+    const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     const camera_data = GpuCameraData{
