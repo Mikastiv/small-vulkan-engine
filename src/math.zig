@@ -528,13 +528,14 @@ pub const mat = struct {
     pub inline fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) Mat4 {
         std.debug.assert(near > 0 and far > 0);
 
-        const h = @tan(fovy / 2.0);
+        const g = 1.0 / @tan(fovy / 2.0);
+        const k = far / (far - near);
 
         return .{
-            .{ 1 / (aspect * h), 0, 0, 0 },
-            .{ 0, 1 / h, 0, 0 },
-            .{ 0, 0, far / far - near, 1 },
-            .{ 0, 0, -(far * near) / far - near, 0 },
+            .{ g / aspect, 0, 0, 0 },
+            .{ 0, -g, 0, 0 },
+            .{ 0, 0, -k, -1 },
+            .{ 0, 0, -near * k, 0 },
         };
     }
 
@@ -542,7 +543,7 @@ pub const mat = struct {
         std.debug.assert(vec.length2(dir) != 0);
 
         const w = vec.normalize(dir);
-        const u = vec.normalize(vec.cross(w, up));
+        const u = vec.normalize(vec.cross(up, w));
         const v = vec.cross(w, u);
 
         const dot_u = vec.dot(u, eye);
@@ -550,10 +551,10 @@ pub const mat = struct {
         const dot_w = vec.dot(w, eye);
 
         return .{
-            .{ u[0], v[0], w[0], 0 },
-            .{ u[1], v[1], w[1], 0 },
-            .{ u[2], v[2], w[2], 0 },
-            .{ -dot_u, -dot_v, -dot_w, 1 },
+            .{ u[0], v[0], -w[0], 0 },
+            .{ u[1], v[1], -w[1], 0 },
+            .{ u[2], v[2], -w[2], 0 },
+            .{ -dot_u, -dot_v, dot_w, 1 },
         };
     }
 
