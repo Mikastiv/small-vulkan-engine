@@ -346,7 +346,7 @@ fn initMeshes(self: *@This()) !void {
     const monkey = RenderObject{
         .material = self.materials.getPtr("defaultmesh").?,
         .mesh = self.meshes.getPtr("monkey").?,
-        .transform_matrix = math.mat.translation(.{ 5, 5, 5 }),
+        .transform_matrix = math.mat.translation(.{ 3, 3, 3 }),
     };
     try self.renderables.append(monkey);
 }
@@ -512,7 +512,7 @@ fn currentFrame(self: *const @This()) FrameData {
 }
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
-    const camera_pos = math.Vec3{ 0, 6, 10 };
+    const camera_pos = math.Vec3{ 0, 3, -10 };
     const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 

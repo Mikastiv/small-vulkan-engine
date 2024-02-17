@@ -261,7 +261,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn add(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
+    pub fn add(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
         checkSamePointerType(@TypeOf(a), @TypeOf(b));
 
         const T = pointerType(@TypeOf(a));
@@ -275,7 +275,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn sub(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
+    pub fn sub(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
         checkSamePointerType(@TypeOf(a), @TypeOf(b));
 
         const T = pointerType(@TypeOf(a));
@@ -289,7 +289,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn divScalar(a: anytype, b: f32) pointerType(@TypeOf(a)) {
+    pub fn divScalar(a: anytype, b: f32) pointerType(@TypeOf(a)) {
         const T = pointerType(@TypeOf(a));
         const size = matsize(T);
 
@@ -301,7 +301,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn mulScalar(a: anytype, b: f32) pointerType(@TypeOf(a)) {
+    pub fn mulScalar(a: anytype, b: f32) pointerType(@TypeOf(a)) {
         const T = pointerType(@TypeOf(a));
         const size = matsize(T);
 
@@ -313,7 +313,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn mulVec(m: anytype, v: anytype) @TypeOf(v) {
+    pub fn mulVec(m: anytype, v: anytype) @TypeOf(v) {
         const T = pointerType(@TypeOf(m));
         const mat_size = matsize(T);
         const vec_size = vecsize(@TypeOf(v));
@@ -330,7 +330,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn mul(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
+    pub fn mul(a: anytype, b: anytype) pointerType(@TypeOf(a)) {
         checkSamePointerType(@TypeOf(a), @TypeOf(b));
 
         const T = pointerType(@TypeOf(a));
@@ -350,7 +350,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn transpose(m: anytype) pointerType(@TypeOf(m)) {
+    pub fn transpose(m: anytype) pointerType(@TypeOf(m)) {
         const T = pointerType(@TypeOf(m));
         const size = matsize(T);
 
@@ -401,7 +401,7 @@ pub const mat = struct {
         return scaling(.{ s, s, s });
     }
 
-    pub inline fn scale(m: *const Mat4, s: Vec3) Mat4 {
+    pub fn scale(m: *const Mat4, s: Vec3) Mat4 {
         var out: Mat4 = undefined;
         out[0] = vec.mul(m[0], s[0]);
         out[1] = vec.mul(m[1], s[1]);
@@ -410,7 +410,7 @@ pub const mat = struct {
         return out;
     }
 
-    pub inline fn scaleScalar(m: *const Mat4, s: f32) Mat4 {
+    pub fn scaleScalar(m: *const Mat4, s: f32) Mat4 {
         return scale(m, .{ s, s, s });
     }
 
@@ -422,7 +422,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn translate2d(m: *const Mat3, t: Vec2) Mat3 {
+    pub fn translate2d(m: *const Mat3, t: Vec2) Mat3 {
         var out = m.*;
         const a = vec.mul(m[0], t[0]);
         const b = vec.mul(m[1], t[1]);
@@ -439,7 +439,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn translate(m: *const Mat4, t: Vec3) Mat4 {
+    pub fn translate(m: *const Mat4, t: Vec3) Mat4 {
         var out = m.*;
         const a = vec.mul(m[0], t[0]);
         const b = vec.mul(m[1], t[1]);
@@ -459,7 +459,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn rotate2d(m: *const Mat2, angle: f32) Mat3 {
+    pub fn rotate2d(m: *const Mat2, angle: f32) Mat3 {
         const rot = rotation2d(angle);
 
         var out = zero(Mat3);
@@ -491,7 +491,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn rotate(m: *const Mat4, angle: f32, axis: Vec3) Mat4 {
+    pub fn rotate(m: *const Mat4, angle: f32, axis: Vec3) Mat4 {
         const rot = rotation(angle, axis);
 
         var out: Mat4 = undefined;
@@ -539,7 +539,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn lookAtDir(eye: Vec3, dir: Vec3, up: Vec3) Mat4 {
+    pub fn lookAtDir(eye: Vec3, dir: Vec3, up: Vec3) Mat4 {
         std.debug.assert(vec.length2(dir) != 0);
 
         const w = vec.normalize(dir);
@@ -558,11 +558,11 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
+    pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
         return lookAtDir(eye, vec.sub(target, eye), up);
     }
 
-    pub inline fn determinant(m: anytype) f32 {
+    pub fn determinant(m: anytype) f32 {
         const T = pointerType(@TypeOf(m));
 
         return switch (T) {
@@ -596,7 +596,7 @@ pub const mat = struct {
         };
     }
 
-    pub inline fn inverseTranspose(m: anytype) pointerType(@TypeOf(m)) {
+    pub fn inverseTranspose(m: anytype) pointerType(@TypeOf(m)) {
         const T = pointerType(@TypeOf(m));
 
         return switch (T) {
