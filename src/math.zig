@@ -44,6 +44,14 @@ pub const vec = struct {
         };
     }
 
+    pub inline fn vec4Dir(v: anytype) Vec4 {
+        return switch (@TypeOf(v)) {
+            Vec2 => .{ v[0], v[1], 0, 0 },
+            Vec3 => .{ v[0], v[1], v[2], 0 },
+            else => unsupportedType(@TypeOf(v)),
+        };
+    }
+
     pub inline fn zero(comptime T: type) T {
         const size = vecsize(T);
 
