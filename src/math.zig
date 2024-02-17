@@ -244,13 +244,25 @@ pub const mat = struct {
     }
 
     pub inline fn identity(comptime T: type) T {
-        const size = matsize(T);
+        var out = std.mem.zeroes(T);
 
-        var out: T = undefined;
-        inline for (0..size) |j| {
-            inline for (0..size) |i| {
-                out[j][i] = if (j == i) 1 else 0;
-            }
+        switch (T) {
+            Mat2 => {
+                out[0][0] = 1;
+                out[1][1] = 1;
+            },
+            Mat3 => {
+                out[0][0] = 1;
+                out[1][1] = 1;
+                out[2][2] = 1;
+            },
+            Mat4 => {
+                out[0][0] = 1;
+                out[1][1] = 1;
+                out[2][2] = 1;
+                out[3][3] = 1;
+            },
+            else => unsupportedType(T),
         }
 
         return out;
@@ -373,11 +385,11 @@ pub const mat = struct {
     }
 
     pub inline fn scaling2d(s: Vec2) Mat3 {
-        return .{
-            .{ s[0], 0, 0 },
-            .{ 0, s[1], 0 },
-            .{ 0, 0, 1 },
-        };
+        var out = std.mem.zeroes(Mat3);
+        out[0][0] = s[0];
+        out[1][1] = s[1];
+        out[2][2] = 1;
+        return out;
     }
 
     pub inline fn scaling2dScalar(s: f32) Mat3 {
@@ -397,12 +409,12 @@ pub const mat = struct {
     }
 
     pub inline fn scaling(s: Vec3) Mat4 {
-        return .{
-            .{ s[0], 0, 0, 0 },
-            .{ 0, s[1], 0, 0 },
-            .{ 0, 0, s[2], 0 },
-            .{ 0, 0, 0, 1 },
-        };
+        var out = std.mem.zeroes(Mat4);
+        out[0][0] = s[0];
+        out[1][1] = s[1];
+        out[2][2] = s[2];
+        out[3][3] = 1;
+        return out;
     }
 
     pub inline fn scalingScalar(s: f32) Mat4 {
@@ -414,7 +426,7 @@ pub const mat = struct {
         out[0] = vec.mul(m[0], s[0]);
         out[1] = vec.mul(m[1], s[1]);
         out[2] = vec.mul(m[2], s[2]);
-        out[3] = m.*[3];
+        out[3] = m[3];
         return out;
     }
 
@@ -423,11 +435,10 @@ pub const mat = struct {
     }
 
     pub inline fn translation2d(t: Vec2) Mat3 {
-        return .{
-            .{ 1, 0, 0 },
-            .{ 0, 1, 0 },
-            .{ t[0], t[1], 1 },
-        };
+        var out = identity(Mat3);
+        out[2][0] = t[0];
+        out[2][1] = t[1];
+        return out;
     }
 
     pub fn translate2d(m: *const Mat3, t: Vec2) Mat3 {
@@ -439,12 +450,11 @@ pub const mat = struct {
     }
 
     pub inline fn translation(t: Vec3) Mat4 {
-        return .{
-            .{ 1, 0, 0, 0 },
-            .{ 0, 1, 0, 0 },
-            .{ 0, 0, 1, 0 },
-            .{ t[0], t[1], t[2], 1 },
-        };
+        var out = identity(Mat4);
+        out[3][0] = t[0];
+        out[3][1] = t[1];
+        out[3][2] = t[2];
+        return out;
     }
 
     pub fn translate(m: *const Mat4, t: Vec3) Mat4 {
@@ -460,11 +470,12 @@ pub const mat = struct {
         const s = @sin(angle);
         const c = @cos(angle);
 
-        return .{
-            .{ c, s, 0 },
-            .{ -s, c, 0 },
-            .{ 0, 0, 1 },
-        };
+        var out = identity(Mat3);
+        out[0][0] = c;
+        out[0][1] = s;
+        out[1][0] = -s;
+        out[1][1] = c;
+        return out;
     }
 
     pub fn rotate2d(m: *const Mat2, angle: f32) Mat3 {
@@ -491,12 +502,17 @@ pub const mat = struct {
         const a = vec.unit(axis);
         const t = vec.mul(a, 1 - c);
 
-        return .{
-            .{ c + t[0] * a[0], t[0] * a[1] - s * a[2], t[0] * a[2] + s * a[1], 0 },
-            .{ t[1] * a[0] + s * a[2], c + t[1] * a[1], t[1] * a[2] - s * a[0], 0 },
-            .{ t[2] * a[0] - s * a[1], t[2] * a[1] + s * a[0], c + t[2] * a[2], 0 },
-            .{ 0, 0, 0, 1 },
-        };
+        var out = identity(Mat4);
+        out[0][0] = c + t[0] * a[0];
+        out[0][1] = t[0] * a[1] - s * a[2];
+        out[0][2] = t[0] * a[2] + s * a[1];
+        out[1][0] = t[1] * a[0] + s * a[2];
+        out[1][1] = c + t[1] * a[1];
+        out[1][2] = t[1] * a[2] - s * a[0];
+        out[2][0] = t[2] * a[0] - s * a[1];
+        out[2][1] = t[2] * a[1] + s * a[0];
+        out[2][2] = c + t[2] * a[2];
+        return out;
     }
 
     pub fn rotate(m: *const Mat4, angle: f32, axis: Vec3) Mat4 {
@@ -525,12 +541,14 @@ pub const mat = struct {
     }
 
     pub inline fn orthographic(left: f32, right: f32, top: f32, bottom: f32, near: f32, far: f32) Mat4 {
-        return .{
-            .{ 2 / (right - left), 0, 0, 0 },
-            .{ 0, 2 / (bottom - top), 0, 0 },
-            .{ 0, 0, 1 / (far - near), 0 },
-            .{ -(right + left) / (right - left), -(right + left) / (right - left), -near / (far - near), 1 },
-        };
+        var out = std.mem.zeroes(Mat4);
+        out[0][0] = 2 / (right - left);
+        out[1][1] = 2 / (bottom - top);
+        out[2][2] = 1 / (far - near);
+        out[3][0] = -(right + left) / (right - left);
+        out[3][1] = -(bottom + top) / (bottom - top);
+        out[3][2] = -near / (far - near);
+        return out;
     }
 
     pub inline fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) Mat4 {
@@ -539,12 +557,13 @@ pub const mat = struct {
         const g = 1.0 / @tan(fovy / 2.0);
         const k = far / (far - near);
 
-        return .{
-            .{ g / aspect, 0, 0, 0 },
-            .{ 0, -g, 0, 0 },
-            .{ 0, 0, -k, -1 },
-            .{ 0, 0, -near * k, 0 },
-        };
+        var out = std.mem.zeroes(Mat4);
+        out[0][0] = g / aspect;
+        out[1][1] = -g;
+        out[2][2] = -k;
+        out[2][3] = -1;
+        out[3][2] = -near * k;
+        return out;
     }
 
     pub fn lookAtDir(eye: Vec3, dir: Vec3, up: Vec3) Mat4 {
