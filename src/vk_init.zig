@@ -143,3 +143,25 @@ pub fn commandBufferAllocateInfo(command_pool: vk.CommandPool) vk.CommandBufferA
         .level = .primary,
     };
 }
+
+pub fn descriptorSetLayoutBinding(descriptor_type: vk.DescriptorType, stage_flags: vk.ShaderStageFlags, binding: u32) vk.DescriptorSetLayoutBinding {
+    return .{
+        .binding = binding,
+        .descriptor_count = 1,
+        .descriptor_type = descriptor_type,
+        .stage_flags = stage_flags,
+    };
+}
+
+pub fn writeDescriptorBuffer(descriptor_type: vk.DescriptorType, dst_set: vk.DescriptorSet, buffer_info: *const vk.DescriptorBufferInfo, binding: u32) vk.WriteDescriptorSet {
+    return .{
+        .dst_binding = binding,
+        .dst_set = dst_set,
+        .descriptor_count = 1,
+        .descriptor_type = descriptor_type,
+        .dst_array_element = 0,
+        .p_buffer_info = @ptrCast(buffer_info),
+        .p_image_info = undefined,
+        .p_texel_buffer_view = undefined,
+    };
+}

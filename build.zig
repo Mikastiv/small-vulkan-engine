@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) void {
     shaders.add("colored_triangle_vert", shader_base_path ++ "colored_triangle.vert", .{});
     shaders.add("colored_triangle_frag", shader_base_path ++ "colored_triangle.frag", .{});
     shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
+    shaders.add("default_lit", shader_base_path ++ "default_lit.frag", .{});
 
     const wf = b.addWriteFiles();
     const stb_image = wf.add("stb_image.c",

@@ -31,29 +31,37 @@ pub const AllocatedImage = struct {
     allocation: vma.Allocation,
 };
 
-pub const MeshPushConstants = extern struct {
+const MeshPushConstants = extern struct {
     data: math.Vec4 align(16),
     render_matrix: math.Mat4 align(16),
 };
 
-pub const GpuCameraData = extern struct {
+const GpuCameraData = extern struct {
     view: math.Mat4 align(16),
     proj: math.Mat4 align(16),
     view_proj: math.Mat4 align(16),
 };
 
-pub const Material = struct {
+const GpuSceneData = extern struct {
+    fog_color: math.Vec4 align(16),
+    fog_distance: math.Vec4 align(16),
+    ambient_color: math.Vec4 align(16),
+    sunlight_direction: math.Vec4 align(16),
+    sunlight_color: math.Vec4 align(16),
+};
+
+const Material = struct {
     pipeline: vk.Pipeline,
     pipeline_layout: vk.PipelineLayout,
 };
 
-pub const RenderObject = struct {
+const RenderObject = struct {
     mesh: *Mesh,
     material: *Material,
     transform_matrix: math.Mat4,
 };
 
-pub const FrameData = struct {
+const FrameData = struct {
     present_semaphore: vk.Semaphore,
     render_semaphore: vk.Semaphore,
     render_fence: vk.Fence,
@@ -102,6 +110,9 @@ renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
 
+scene_parameters: GpuSceneData,
+scene_parameters_buffer: AllocatedBuffer,
+
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
 
@@ -111,6 +122,7 @@ pub fn init(allocator: Allocator) !@This() {
     const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
     const surface = try window.createSurface(instance.handle);
     const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{ .surface = surface });
+    log.info("gpu minimum alignment: {d}", .{physical_device.properties.limits.min_uniform_buffer_offset_alignment});
     const device = try vkk.Device.create(allocator, &physical_device, null);
     const vma_info = vma.AllocatorCreateInfo{
         .instance = instance.handle,
@@ -153,13 +165,18 @@ pub fn init(allocator: Allocator) !@This() {
         try deletion_queue.append(VulkanDeleter.make(framebuffer, DeviceDispatch.destroyFramebuffer));
     }
 
+    const min_alignment = physical_device.properties.limits.min_uniform_buffer_offset_alignment;
+    const scene_params_size = frame_overlap * alignUniformBuffer(min_alignment, @sizeOf(GpuSceneData));
+    const scene_params_buffer = try createBuffer(vma_allocator, scene_params_size, .{ .uniform_buffer_bit = true }, .cpu_to_gpu);
+    try buffer_deletion_queue.append(scene_params_buffer);
+
     const descriptor_set_layout = try createDescriptorSetLayout(device.handle);
     try deletion_queue.append(VulkanDeleter.make(descriptor_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
 
     const descriptor_pool = try createDescriptorPool(device.handle);
     try deletion_queue.append(VulkanDeleter.make(descriptor_pool, DeviceDispatch.destroyDescriptorPool));
 
-    const frames = try createFrameData(vma_allocator, device.handle, physical_device.graphics_family_index, descriptor_set_layout, descriptor_pool);
+    const frames = try createFrameData(vma_allocator, device.handle, physical_device.graphics_family_index, descriptor_set_layout, descriptor_pool, scene_params_buffer);
     for (frames) |frame| {
         try deletion_queue.append(VulkanDeleter.make(frame.command_pool, DeviceDispatch.destroyCommandPool));
         try deletion_queue.append(VulkanDeleter.make(frame.render_fence, DeviceDispatch.destroyFence));
@@ -192,6 +209,8 @@ pub fn init(allocator: Allocator) !@This() {
         .frames = frames,
         .descriptor_set_layout = descriptor_set_layout,
         .descriptor_pool = descriptor_pool,
+        .scene_parameters_buffer = scene_params_buffer,
+        .scene_parameters = std.mem.zeroes(GpuSceneData),
     };
 
     try engine.initPipelines();
@@ -253,6 +272,13 @@ pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
 }
 
+fn alignUniformBuffer(min_ubo_alignment: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
+    if (min_ubo_alignment > 0)
+        return std.mem.alignForward(vk.DeviceSize, size, min_ubo_alignment)
+    else
+        return size;
+}
+
 fn update(self: *@This(), dt: f32) !void {
     for (self.renderables.items) |*object| {
         var transform = object.transform_matrix;
@@ -262,31 +288,30 @@ fn update(self: *@This(), dt: f32) !void {
 }
 
 fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
-    const pool_size = vk.DescriptorPoolSize{
-        .descriptor_count = 10,
-        .type = .uniform_buffer,
+    const pool_sizes = [_]vk.DescriptorPoolSize{
+        .{ .descriptor_count = 10, .type = .uniform_buffer },
+        .{ .descriptor_count = 10, .type = .uniform_buffer_dynamic },
     };
 
     const pool_info = vk.DescriptorPoolCreateInfo{
         .max_sets = 10,
-        .pool_size_count = 1,
-        .p_pool_sizes = @ptrCast(&pool_size),
+        .pool_size_count = pool_sizes.len,
+        .p_pool_sizes = &pool_sizes,
     };
 
     return try vkd().createDescriptorPool(device, &pool_info, null);
 }
 
-fn createDescriptorSetLayout(device: vk.Device) !vk.DescriptorSetLayout {
-    const buffer_binding = vk.DescriptorSetLayoutBinding{
-        .binding = 0,
-        .descriptor_count = 1,
-        .descriptor_type = .uniform_buffer,
-        .stage_flags = .{ .vertex_bit = true },
-    };
+fn createDescriptorSetLayout(
+    device: vk.Device,
+) !vk.DescriptorSetLayout {
+    const camera_binding = vk_init.descriptorSetLayoutBinding(.uniform_buffer, .{ .vertex_bit = true }, 0);
+    const scene_binding = vk_init.descriptorSetLayoutBinding(.uniform_buffer_dynamic, .{ .vertex_bit = true, .fragment_bit = true }, 1);
 
+    const bindings = [_]vk.DescriptorSetLayoutBinding{ camera_binding, scene_binding };
     const set_info = vk.DescriptorSetLayoutCreateInfo{
-        .binding_count = 1,
-        .p_bindings = @ptrCast(&buffer_binding),
+        .binding_count = bindings.len,
+        .p_bindings = &bindings,
     };
 
     return try vkd().createDescriptorSetLayout(device, &set_info, null);
@@ -352,10 +377,10 @@ fn initMeshes(self: *@This()) !void {
 }
 
 fn initPipelines(self: *@This()) !void {
-    const triangle_shader_frag = try createShaderModule(self.device.handle, &Shaders.colored_triangle_frag);
     const triangle_mesh_shader_vert = try createShaderModule(self.device.handle, &Shaders.triangle_mesh_vert);
-    defer vkd().destroyShaderModule(self.device.handle, triangle_shader_frag, null);
     defer vkd().destroyShaderModule(self.device.handle, triangle_mesh_shader_vert, null);
+    const triangle_shader_frag = try createShaderModule(self.device.handle, &Shaders.default_lit);
+    defer vkd().destroyShaderModule(self.device.handle, triangle_shader_frag, null);
 
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(self.allocator);
     defer shader_stages.deinit();
@@ -423,6 +448,7 @@ fn createFrameData(
     graphics_family_index: u32,
     descriptor_set_layout: vk.DescriptorSetLayout,
     descriptor_pool: vk.DescriptorPool,
+    scene_params_buffer: AllocatedBuffer,
 ) ![frame_overlap]FrameData {
     const command_pool_info = vk_init.commandPoolCreateInfo(
         .{ .reset_command_buffer_bit = true },
@@ -454,24 +480,22 @@ fn createFrameData(
         var descriptor_set: vk.DescriptorSet = .null_handle;
         try vkd().allocateDescriptorSets(device, &alloc_info, @ptrCast(&descriptor_set));
 
-        const descriptor_buffer_info = vk.DescriptorBufferInfo{
+        const camera_buffer_info = vk.DescriptorBufferInfo{
             .buffer = buffer.buffer,
             .offset = 0,
             .range = @sizeOf(GpuCameraData),
         };
-
-        const set_write = vk.WriteDescriptorSet{
-            .dst_binding = 0,
-            .dst_set = descriptor_set,
-            .dst_array_element = 0,
-            .descriptor_count = 1,
-            .descriptor_type = .uniform_buffer,
-            .p_buffer_info = @ptrCast(&descriptor_buffer_info),
-            .p_image_info = undefined,
-            .p_texel_buffer_view = undefined,
+        const scene_buffer_info = vk.DescriptorBufferInfo{
+            .buffer = scene_params_buffer.buffer,
+            .offset = 0,
+            .range = @sizeOf(GpuSceneData),
         };
 
-        vkd().updateDescriptorSets(device, 1, @ptrCast(&set_write), 0, null);
+        const camera_write = vk_init.writeDescriptorBuffer(.uniform_buffer, descriptor_set, &camera_buffer_info, 0);
+        const scene_write = vk_init.writeDescriptorBuffer(.uniform_buffer_dynamic, descriptor_set, &scene_buffer_info, 1);
+
+        const writes = [_]vk.WriteDescriptorSet{ camera_write, scene_write };
+        vkd().updateDescriptorSets(device, writes.len, &writes, 0, null);
 
         ptr.render_semaphore = sync.render_semaphore;
         ptr.present_semaphore = sync.present_semaphore;
@@ -524,12 +548,29 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
 
     const current_frame = self.currentFrame();
 
-    const data = try vma.mapMemory(self.vma_allocator, current_frame.camera_buffer.allocation);
+    {
+        const data = try vma.mapMemory(self.vma_allocator, current_frame.camera_buffer.allocation);
 
-    const ptr: *GpuCameraData = @ptrCast(@alignCast(data));
-    ptr.* = camera_data;
+        const ptr: *GpuCameraData = @ptrCast(@alignCast(data));
+        ptr.* = camera_data;
 
-    vma.unmapMemory(self.vma_allocator, current_frame.camera_buffer.allocation);
+        vma.unmapMemory(self.vma_allocator, current_frame.camera_buffer.allocation);
+    }
+
+    const alignment = alignUniformBuffer(self.device.physical_device.properties.limits.min_uniform_buffer_offset_alignment, @sizeOf(GpuSceneData));
+    const frame_index = self.frame_number % frame_overlap;
+    const uniform_offset = alignment * frame_index;
+    {
+        const data = try vma.mapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation);
+
+        const framed: f32 = @as(f32, @floatFromInt(self.frame_number)) / 120.0;
+        const ptr: [*]u8 = @ptrCast(@alignCast(data));
+
+        self.scene_parameters.ambient_color = .{ @sin(framed) + 0.5, 0, @cos(framed), 1 };
+        @memcpy(ptr[uniform_offset .. uniform_offset + @sizeOf(GpuSceneData)], std.mem.asBytes(&self.scene_parameters));
+
+        vma.unmapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation);
+    }
 
     var last_mesh: ?*Mesh = null;
     var last_material: ?*Material = null;
@@ -539,7 +580,7 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
 
         if (bind_material) {
             vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
-            vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 0, 1, @ptrCast(&current_frame.global_descriptor), 0, null);
+            vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 0, 1, @ptrCast(&current_frame.global_descriptor), 1, @ptrCast(&uniform_offset));
             last_material = object.material;
         }
 
