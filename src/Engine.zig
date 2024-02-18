@@ -189,15 +189,7 @@ pub fn init(allocator: Allocator) !@This() {
 
     const global_descriptor_set = try createGlobalDescriptorSet(device.handle, descriptor_pool, global_set_layout);
 
-    const global_buffer_info = vk.DescriptorBufferInfo{
-        .buffer = global_data_buffer.buffer,
-        .offset = 0,
-        .range = @sizeOf(GpuGlobalData),
-    };
-
-    const global_write = vk_init.writeDescriptorBuffer(.uniform_buffer_dynamic, global_descriptor_set, &global_buffer_info, 0);
-    const writes = [_]vk.WriteDescriptorSet{global_write};
-    vkd().updateDescriptorSets(device.handle, writes.len, &writes, 0, null);
+    writeGlobalDescriptorSet(device.handle, global_data_buffer.buffer, global_descriptor_set);
 
     const object_binding = vk_init.descriptorSetLayoutBinding(.storage_buffer, .{ .vertex_bit = true }, 0);
     const object_set_layout = try createDescriptorSetLayout(device.handle, &.{object_binding});
@@ -299,6 +291,18 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn writeGlobalDescriptorSet(device: vk.Device, buffer: vk.Buffer, set: vk.DescriptorSet) void {
+    const global_buffer_info = vk.DescriptorBufferInfo{
+        .buffer = buffer,
+        .offset = 0,
+        .range = @sizeOf(GpuGlobalData),
+    };
+
+    const global_write = vk_init.writeDescriptorBuffer(.uniform_buffer_dynamic, set, &global_buffer_info, 0);
+    const writes = [_]vk.WriteDescriptorSet{global_write};
+    vkd().updateDescriptorSets(device, writes.len, &writes, 0, null);
 }
 
 fn createGlobalDescriptorSet(device: vk.Device, descriptor_pool: vk.DescriptorPool, layout: vk.DescriptorSetLayout) !vk.DescriptorSet {
