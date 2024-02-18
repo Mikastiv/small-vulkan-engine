@@ -6,11 +6,16 @@ layout (location = 2) in vec3 color;
 
 layout (location = 0) out vec3 out_color;
 
-layout (set = 0, binding = 0) uniform CameraData {
-    mat4 view;
+layout (set = 0, binding = 0) uniform GlobalData {
+	mat4 view;
     mat4 proj;
     mat4 view_proj;
-} camera_data;
+	vec4 fog_color;
+	vec4 fog_distances;
+	vec4 ambient_color;
+	vec4 sunlight_direction;
+	vec4 sunlight_color;
+} global_data;
 
 struct ObjectData {
     mat4 model;
@@ -27,7 +32,7 @@ layout (push_constant) uniform Constants {
 
 void main() {
     mat4 model_matrix = object_buffer.objects[gl_BaseInstance].model;
-    mat4 transform_matrix = camera_data.view_proj * model_matrix;
+    mat4 transform_matrix = global_data.view_proj * model_matrix;
     gl_Position = transform_matrix * vec4(position, 1);
     out_color = color;
 }
