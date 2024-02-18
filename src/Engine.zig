@@ -187,7 +187,7 @@ pub fn init(allocator: Allocator) !@This() {
     const global_set_layout = try createDescriptorSetLayout(device.handle, &.{global_binding});
     try deletion_queue.append(VulkanDeleter.make(global_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
 
-    const global_descriptor_set = try createGlobalDescriptorSet(device.handle, descriptor_pool, global_set_layout);
+    const global_descriptor_set = try createDescriptorSet(device.handle, descriptor_pool, &.{global_set_layout});
 
     writeGlobalDescriptorSet(device.handle, global_data_buffer.buffer, global_descriptor_set);
 
@@ -305,17 +305,17 @@ fn writeGlobalDescriptorSet(device: vk.Device, buffer: vk.Buffer, set: vk.Descri
     vkd().updateDescriptorSets(device, writes.len, &writes, 0, null);
 }
 
-fn createGlobalDescriptorSet(device: vk.Device, descriptor_pool: vk.DescriptorPool, layout: vk.DescriptorSetLayout) !vk.DescriptorSet {
-    const global_alloc_info = vk.DescriptorSetAllocateInfo{
+fn createDescriptorSet(device: vk.Device, descriptor_pool: vk.DescriptorPool, layouts: []const vk.DescriptorSetLayout) !vk.DescriptorSet {
+    const alloc_info = vk.DescriptorSetAllocateInfo{
         .descriptor_pool = descriptor_pool,
-        .descriptor_set_count = 1,
-        .p_set_layouts = @ptrCast(&layout),
+        .descriptor_set_count = @intCast(layouts.len),
+        .p_set_layouts = layouts.ptr,
     };
 
-    var global_descriptor_set: vk.DescriptorSet = .null_handle;
-    try vkd().allocateDescriptorSets(device, &global_alloc_info, @ptrCast(&global_descriptor_set));
+    var descriptor_set: vk.DescriptorSet = .null_handle;
+    try vkd().allocateDescriptorSets(device, &alloc_info, @ptrCast(&descriptor_set));
 
-    return global_descriptor_set;
+    return descriptor_set;
 }
 
 fn alignUniformBuffer(min_ubo_alignment: vk.DeviceSize, size: vk.DeviceSize) vk.DeviceSize {
@@ -510,14 +510,7 @@ fn createFrameData(
 
         const objects_buffer = try createBuffer(vma_allocator, @sizeOf(GpuObjectData) * max_objects, .{ .storage_buffer_bit = true }, .cpu_to_gpu);
 
-        const object_alloc_info = vk.DescriptorSetAllocateInfo{
-            .descriptor_pool = descriptor_pool,
-            .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast(&object_set_layout),
-        };
-
-        var object_descriptor_set: vk.DescriptorSet = .null_handle;
-        try vkd().allocateDescriptorSets(device, &object_alloc_info, @ptrCast(&object_descriptor_set));
+        const object_descriptor_set = try createDescriptorSet(device, descriptor_pool, &.{object_set_layout});
 
         const object_buffer_info = vk.DescriptorBufferInfo{
             .buffer = objects_buffer.buffer,
