@@ -30,6 +30,7 @@ pub const device = vk.DeviceCommandFlags{
     .updateDescriptorSets = true,
     .createCommandPool = true,
     .destroyCommandPool = true,
+    .resetCommandPool = true,
     .allocateCommandBuffers = true,
     .freeCommandBuffers = true,
     .resetCommandBuffer = true,

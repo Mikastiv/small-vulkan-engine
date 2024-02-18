@@ -76,6 +76,12 @@ const FrameData = struct {
     objects_descriptor: vk.DescriptorSet,
 };
 
+const UploadContext = struct {
+    fence: vk.Fence,
+    command_pool: vk.CommandPool,
+    command_buffer: vk.CommandBuffer,
+};
+
 const DeletionQueue = std.ArrayList(VulkanDeleter);
 const BufferDeletionQueue = std.ArrayList(AllocatedBuffer);
 const ImageDeletionQueue = std.ArrayList(AllocatedImage);
@@ -117,6 +123,8 @@ meshes: std.StringHashMap(Mesh),
 
 global_gpu_data: GpuGlobalData,
 global_buffer: AllocatedBuffer,
+
+upload_context: UploadContext,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -204,6 +212,10 @@ pub fn init(allocator: Allocator) !@This() {
         try buffer_deletion_queue.append(frame.objects_buffer);
     }
 
+    const upload_context = try createUploadContext(device.handle, device.physical_device.graphics_family_index);
+    try deletion_queue.append(VulkanDeleter.make(upload_context.fence, DeviceDispatch.destroyFence));
+    try deletion_queue.append(VulkanDeleter.make(upload_context.command_pool, DeviceDispatch.destroyCommandPool));
+
     var engine: @This() = .{
         .allocator = allocator,
         .window = window,
@@ -232,6 +244,7 @@ pub fn init(allocator: Allocator) !@This() {
         .global_descriptor_set = global_descriptor_set,
         .global_gpu_data = std.mem.zeroes(GpuGlobalData),
         .global_buffer = global_data_buffer,
+        .upload_context = upload_context,
     };
 
     try engine.initPipelines();
@@ -291,6 +304,45 @@ pub fn run(self: *@This()) !void {
 
 pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
+}
+
+fn immediateSubmit(self: *const @This(), submit_ctx: anytype) !void {
+    const cmd = self.upload_context.command_buffer;
+
+    const cmd_begin_info = vk_init.commandBufferBeginInfo(.{ .one_time_submit_bit = true });
+    try vkd().beginCommandBuffer(cmd, &cmd_begin_info);
+
+    submit_ctx.recordCommands(cmd);
+
+    try vkd().endCommandBuffer(cmd);
+
+    const submit = vk_init.submitInfo(cmd);
+    try vkd().queueSubmit(self.device.graphics_queue, 1, @ptrCast(&submit), self.upload_context.fence);
+
+    const res = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&self.upload_context.fence), vk.TRUE, std.math.maxInt(u64));
+    std.debug.assert(res == .success);
+
+    try vkd().resetFences(self.device.handle, 1, @ptrCast(&self.upload_context.fence));
+
+    try vkd().resetCommandPool(self.device.handle, self.upload_context.command_pool, .{});
+}
+
+fn createUploadContext(device: vk.Device, graphics_family_index: u32) !UploadContext {
+    const fence_info = vk_init.fenceCreateInfo(.{});
+    const fence = try vkd().createFence(device, &fence_info, null);
+
+    const command_pool_info = vk_init.commandPoolCreateInfo(.{}, graphics_family_index);
+    const command_pool = try vkd().createCommandPool(device, &command_pool_info, null);
+
+    const command_buffer_info = vk_init.commandBufferAllocateInfo(command_pool);
+    var command_buffer: vk.CommandBuffer = undefined;
+    try vkd().allocateCommandBuffers(device, &command_buffer_info, @ptrCast(&command_buffer));
+
+    return .{
+        .fence = fence,
+        .command_pool = command_pool,
+        .command_buffer = command_buffer,
+    };
 }
 
 fn writeGlobalDescriptorSet(device: vk.Device, buffer: vk.Buffer, set: vk.DescriptorSet) void {

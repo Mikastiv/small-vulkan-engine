@@ -165,3 +165,16 @@ pub fn writeDescriptorBuffer(descriptor_type: vk.DescriptorType, dst_set: vk.Des
         .p_texel_buffer_view = undefined,
     };
 }
+
+fn commandBufferBeginInfo(flags: vk.CommandBufferUsageFlags) vk.CommandBufferBeginInfo {
+    return .{
+        .flags = flags,
+    };
+}
+
+fn submitInfo(cmd: vk.CommandBuffer) vk.SubmitInfo {
+    return .{
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast(&cmd),
+    };
+}
