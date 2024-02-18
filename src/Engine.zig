@@ -23,16 +23,6 @@ const window_title = "Vulkan Engine";
 const frame_overlap = 2;
 const max_objects = 10000;
 
-pub const AllocatedBuffer = struct {
-    buffer: vk.Buffer,
-    allocation: vma.Allocation,
-};
-
-pub const AllocatedImage = struct {
-    image: vk.Image,
-    allocation: vma.Allocation,
-};
-
 const MeshPushConstants = extern struct {
     data: math.Vec4 align(16),
     render_matrix: math.Mat4 align(16),
@@ -72,7 +62,7 @@ const FrameData = struct {
     command_pool: vk.CommandPool,
     command_buffer: vk.CommandBuffer,
 
-    objects_buffer: AllocatedBuffer,
+    objects_buffer: vma.AllocatedBuffer,
     objects_descriptor: vk.DescriptorSet,
 };
 
@@ -83,8 +73,8 @@ const UploadContext = struct {
 };
 
 const DeletionQueue = std.ArrayList(VulkanDeleter);
-const BufferDeletionQueue = std.ArrayList(AllocatedBuffer);
-const ImageDeletionQueue = std.ArrayList(AllocatedImage);
+const BufferDeletionQueue = std.ArrayList(vma.AllocatedBuffer);
+const ImageDeletionQueue = std.ArrayList(vma.AllocatedImage);
 
 frame_number: usize = 0,
 stop_rendering: bool = false,
@@ -105,7 +95,7 @@ swapchain: vkk.Swapchain,
 swapchain_images: []vk.Image,
 swapchain_image_views: []vk.ImageView,
 depth_format: vk.Format,
-depth_image: AllocatedImage,
+depth_image: vma.AllocatedImage,
 depth_image_view: vk.ImageView,
 render_pass: vk.RenderPass,
 
@@ -122,7 +112,7 @@ materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
 
 global_gpu_data: GpuGlobalData,
-global_buffer: AllocatedBuffer,
+global_buffer: vma.AllocatedBuffer,
 
 upload_context: UploadContext,
 
@@ -140,7 +130,7 @@ pub fn init(allocator: Allocator) !@This() {
             .shader_draw_parameters = vk.TRUE,
         },
     });
-    const device = try vkk.Device.create(allocator, &physical_device, null);
+    const device = try vkk.Device.create(allocator, &physical_device, null, null);
     const vma_info = vma.AllocatorCreateInfo{
         .instance = instance.handle,
         .physical_device = physical_device.handle,
@@ -170,7 +160,7 @@ pub fn init(allocator: Allocator) !@This() {
     const depth_image = try createDepthImage(vma_allocator, depth_format, swapchain.extent);
     try image_deletion_queue.append(depth_image);
 
-    const depth_image_view_info = vk_init.imageViewCreateInfo(depth_format, depth_image.image, .{ .depth_bit = true });
+    const depth_image_view_info = vk_init.imageViewCreateInfo(depth_format, depth_image.handle, .{ .depth_bit = true });
     const depth_image_view = try vkd().createImageView(device.handle, &depth_image_view_info, null);
     try deletion_queue.append(VulkanDeleter.make(depth_image_view, DeviceDispatch.destroyImageView));
 
@@ -197,7 +187,7 @@ pub fn init(allocator: Allocator) !@This() {
 
     const global_descriptor_set = try createDescriptorSet(device.handle, descriptor_pool, &.{global_set_layout});
 
-    writeGlobalDescriptorSet(device.handle, global_data_buffer.buffer, global_descriptor_set);
+    writeGlobalDescriptorSet(device.handle, global_data_buffer.handle, global_descriptor_set);
 
     const object_binding = vk_init.descriptorSetLayoutBinding(.storage_buffer, .{ .vertex_bit = true }, 0);
     const object_set_layout = try createDescriptorSetLayout(device.handle, &.{object_binding});
@@ -316,11 +306,11 @@ fn immediateSubmit(self: *const @This(), submit_ctx: anytype) !void {
 
     try vkd().endCommandBuffer(cmd);
 
-    const submit = vk_init.submitInfo(cmd);
+    const submit = vk_init.submitInfo(&.{cmd});
     try vkd().queueSubmit(self.device.graphics_queue, 1, @ptrCast(&submit), self.upload_context.fence);
 
     const res = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&self.upload_context.fence), vk.TRUE, std.math.maxInt(u64));
-    std.debug.assert(res == .success);
+    if (res != .success) return error.Timeout;
 
     try vkd().resetFences(self.device.handle, 1, @ptrCast(&self.upload_context.fence));
 
@@ -418,7 +408,7 @@ fn createBuffer(
     size: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
     memory_usage: vma.MemoryUsage,
-) !AllocatedBuffer {
+) !vma.AllocatedBuffer {
     const buffer_info = vk.BufferCreateInfo{
         .size = size,
         .usage = usage,
@@ -427,13 +417,7 @@ fn createBuffer(
 
     const alloc_info = vma.AllocationCreateInfo{ .usage = memory_usage };
 
-    var allocation: vma.Allocation = undefined;
-    const buffer = try vma.createBuffer(vma_allocator, &buffer_info, &alloc_info, &allocation, null);
-
-    return .{
-        .buffer = buffer,
-        .allocation = allocation,
-    };
+    return vma.createBuffer(vma_allocator, &buffer_info, &alloc_info, null);
 }
 
 fn initScene(self: *@This()) !void {
@@ -458,10 +442,10 @@ fn initScene(self: *@This()) !void {
 
 fn initMeshes(self: *@This()) !void {
     const triangle_vertices = try makeTriangle(self.allocator);
-    var mesh = try uploadMesh(self.vma_allocator, triangle_vertices, &self.buffer_deletion_queue);
+    var mesh = try self.uploadMesh(triangle_vertices);
     try self.meshes.put("triangle", mesh);
     const monkey_vertices = try Mesh.loadFromFile(self.allocator, "assets/monkey_smooth.obj");
-    mesh = try uploadMesh(self.vma_allocator, monkey_vertices, &self.buffer_deletion_queue);
+    mesh = try self.uploadMesh(monkey_vertices);
     try self.meshes.put("monkey", mesh);
 
     const monkey = RenderObject{
@@ -565,7 +549,7 @@ fn createFrameData(
         const object_descriptor_set = try createDescriptorSet(device, descriptor_pool, &.{object_set_layout});
 
         const object_buffer_info = vk.DescriptorBufferInfo{
-            .buffer = objects_buffer.buffer,
+            .buffer = objects_buffer.handle,
             .offset = 0,
             .range = @sizeOf(GpuObjectData) * max_objects,
         };
@@ -585,7 +569,7 @@ fn createFrameData(
     return frames;
 }
 
-fn createDepthImage(vma_allocator: vma.Allocator, depth_format: vk.Format, extent: vk.Extent2D) !AllocatedImage {
+fn createDepthImage(vma_allocator: vma.Allocator, depth_format: vk.Format, extent: vk.Extent2D) !vma.AllocatedImage {
     const depth_extent = vk.Extent3D{
         .depth = 1,
         .width = extent.width,
@@ -598,15 +582,7 @@ fn createDepthImage(vma_allocator: vma.Allocator, depth_format: vk.Format, exten
         .required_flags = .{ .device_local_bit = true },
     };
 
-    var allocation: vma.Allocation = undefined;
-    const image = try vma.createImage(vma_allocator, &depth_image_info, &depth_image_alloc_info, &allocation, null);
-
-    const depth_image = AllocatedImage{
-        .image = image,
-        .allocation = allocation,
-    };
-
-    return depth_image;
+    return vma.createImage(vma_allocator, &depth_image_info, &depth_image_alloc_info, null);
 }
 
 fn currentFrame(self: *const @This()) FrameData {
@@ -670,7 +646,7 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
         vkd().cmdPushConstants(cmd, object.material.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), &push);
 
         if (bind_mesh) {
-            vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.buffer), &[_]vk.DeviceSize{0});
+            vkd().cmdBindVertexBuffers(cmd, 0, 1, @ptrCast(&object.mesh.vertex_buffer.handle), &[_]vk.DeviceSize{0});
             last_mesh = object.mesh;
         }
 
@@ -707,49 +683,57 @@ fn makeTriangle(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
 }
 
 fn uploadMesh(
-    vma_allocator: vma.Allocator,
+    self: *@This(),
     vertices: std.ArrayList(Mesh.Vertex),
-    deletion_queue: *BufferDeletionQueue,
 ) !Mesh {
-    const buffer = try createMeshBuffer(vma_allocator, vertices.items.len * @sizeOf(Mesh.Vertex), deletion_queue);
+    const buffer_size = vertices.items.len * @sizeOf(Mesh.Vertex);
 
-    const data = try vma.mapMemory(vma_allocator, buffer.allocation);
+    const staging_buffer_info = vk.BufferCreateInfo{
+        .size = buffer_size,
+        .usage = .{ .transfer_src_bit = true },
+        .sharing_mode = .exclusive,
+    };
+    const staging_buffer = try vma.createBuffer(self.vma_allocator, &staging_buffer_info, &.{ .usage = .cpu_only }, null);
+    defer vma.destroyBuffer(self.vma_allocator, staging_buffer.handle, staging_buffer.allocation);
 
-    const ptr: [*]Mesh.Vertex = @ptrCast(@alignCast(data));
-    @memcpy(ptr, vertices.items);
+    {
+        const data = try vma.mapMemory(self.vma_allocator, staging_buffer.allocation);
+        const ptr: [*]Mesh.Vertex = @ptrCast(@alignCast(data));
 
-    vma.unmapMemory(vma_allocator, buffer.allocation);
+        @memcpy(ptr, vertices.items);
+
+        vma.unmapMemory(self.vma_allocator, staging_buffer.allocation);
+    }
+
+    const buffer_info = vk.BufferCreateInfo{
+        .size = buffer_size,
+        .usage = .{ .vertex_buffer_bit = true, .transfer_dst_bit = true },
+        .sharing_mode = .exclusive,
+    };
+    const buffer = try vma.createBuffer(self.vma_allocator, &buffer_info, &.{ .usage = .gpu_only }, null);
+    try self.buffer_deletion_queue.append(buffer);
+
+    const MeshCopy = struct {
+        staging_buffer: vk.Buffer,
+        dst_buffer: vk.Buffer,
+        size: vk.DeviceSize,
+
+        fn recordCommands(ctx: @This(), cmd: vk.CommandBuffer) void {
+            const copy = vk.BufferCopy{ .size = ctx.size, .src_offset = 0, .dst_offset = 0 };
+            vkd().cmdCopyBuffer(cmd, ctx.staging_buffer, ctx.dst_buffer, 1, @ptrCast(&copy));
+        }
+    };
+
+    try self.immediateSubmit(MeshCopy{
+        .staging_buffer = staging_buffer.handle,
+        .dst_buffer = buffer.handle,
+        .size = buffer_size,
+    });
 
     return .{
         .vertices = vertices,
         .vertex_buffer = buffer,
     };
-}
-
-fn createMeshBuffer(
-    vma_allocator: vma.Allocator,
-    size: vk.DeviceSize,
-    deletion_queue: *BufferDeletionQueue,
-) !AllocatedBuffer {
-    const buffer_info = vk.BufferCreateInfo{
-        .size = size,
-        .usage = .{ .vertex_buffer_bit = true },
-        .sharing_mode = .exclusive,
-    };
-
-    const vma_alloc_info = vma.AllocationCreateInfo{
-        .usage = .cpu_to_gpu,
-    };
-    var allocation: vma.Allocation = undefined;
-    const buffer = try vma.createBuffer(vma_allocator, &buffer_info, &vma_alloc_info, &allocation, null);
-
-    const allocated_buffer = AllocatedBuffer{
-        .buffer = buffer,
-        .allocation = allocation,
-    };
-    try deletion_queue.append(allocated_buffer);
-
-    return allocated_buffer;
 }
 
 const VulkanDeleter = struct {
@@ -789,17 +773,17 @@ fn flushDeletionQueue(device: vk.Device, entries: []const VulkanDeleter) void {
     }
 }
 
-fn flushBufferDeletionQueue(vma_allocator: vma.Allocator, entries: []const AllocatedBuffer) void {
+fn flushBufferDeletionQueue(vma_allocator: vma.Allocator, entries: []const vma.AllocatedBuffer) void {
     var it = std.mem.reverseIterator(entries);
     while (it.next()) |entry| {
-        vma.destroyBuffer(vma_allocator, entry.buffer, entry.allocation);
+        vma.destroyBuffer(vma_allocator, entry.handle, entry.allocation);
     }
 }
 
-fn flushImageDeletionQueue(vma_allocator: vma.Allocator, entries: []const AllocatedImage) void {
+fn flushImageDeletionQueue(vma_allocator: vma.Allocator, entries: []const vma.AllocatedImage) void {
     var it = std.mem.reverseIterator(entries);
     while (it.next()) |entry| {
-        vma.destroyImage(vma_allocator, entry.image, entry.allocation);
+        vma.destroyImage(vma_allocator, entry.handle, entry.allocation);
     }
 }
 

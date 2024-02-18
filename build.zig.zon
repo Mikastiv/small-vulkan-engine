@@ -12,12 +12,12 @@
             .hash = "122091debcee20ff2aaf983a9e8c215d4e50cc6caf44975442218901ea728e7dd79a",
         },
         .vk_kickstart = .{
-            .url = "https://github.com/Mikastiv/vk-kickstart/archive/f7eafac039803587a001c6726f6f90767f5cd34f.tar.gz",
-            .hash = "12204fa70c8458c9dd110a280282aab116af275e3b57f43f687706ccf6e43d7f03d4",
+            .url = "https://github.com/Mikastiv/vk-kickstart/archive/011fbc50a4490ebf7ae09d6e46c6271cb8e42a28.tar.gz",
+            .hash = "1220baf586fbef9362579851dbb0c4a3dc61bc887a2a7ae17e2c776b8d4cc5b5a62e",
         },
         .vma_zig = .{
-            .url = "https://github.com/Mikastiv/vma-zig/archive/37af7bc9715ddceb14cee74ad9a3e7a02b97316c.tar.gz",
-            .hash = "122082e1e2fc2d09b641b4c37e45b7a6d1d6f3d40412d7e4bc87f01614214fe1fa34",
+            .url = "https://github.com/Mikastiv/vma-zig/archive/14e0a77022c8fd9ebdf08d8230852ceddf54db3d.tar.gz",
+            .hash = "122030f8bf5b54c09e4f08698195260b2b7c3becd893f84b60a63b11eff1fd63fa42",
         },
     },
     .paths = .{

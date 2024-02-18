@@ -3,6 +3,7 @@ const math = @import("math.zig");
 const Engine = @import("Engine.zig");
 const vk = @import("vulkan-zig");
 const c = @import("c.zig");
+const vma = @import("vma-zig");
 
 pub const VertexInputDescription = struct {
     bindings: std.ArrayList(vk.VertexInputBindingDescription),
@@ -42,7 +43,7 @@ pub const Vertex = extern struct {
 };
 
 vertices: std.ArrayList(Vertex),
-vertex_buffer: Engine.AllocatedBuffer = undefined,
+vertex_buffer: vma.AllocatedBuffer = undefined,
 
 pub fn loadFromFile(allocator: std.mem.Allocator, filename: [*:0]const u8) !std.ArrayList(Vertex) {
     const flags = c.TINYOBJ_FLAG_TRIANGULATE;

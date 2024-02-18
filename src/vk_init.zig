@@ -166,15 +166,15 @@ pub fn writeDescriptorBuffer(descriptor_type: vk.DescriptorType, dst_set: vk.Des
     };
 }
 
-fn commandBufferBeginInfo(flags: vk.CommandBufferUsageFlags) vk.CommandBufferBeginInfo {
+pub fn commandBufferBeginInfo(flags: vk.CommandBufferUsageFlags) vk.CommandBufferBeginInfo {
     return .{
         .flags = flags,
     };
 }
 
-fn submitInfo(cmd: vk.CommandBuffer) vk.SubmitInfo {
+pub fn submitInfo(cmds: []const vk.CommandBuffer) vk.SubmitInfo {
     return .{
-        .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast(&cmd),
+        .command_buffer_count = @intCast(cmds.len),
+        .p_command_buffers = cmds.ptr,
     };
 }
