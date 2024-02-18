@@ -688,12 +688,7 @@ fn uploadMesh(
 ) !Mesh {
     const buffer_size = vertices.items.len * @sizeOf(Mesh.Vertex);
 
-    const staging_buffer_info = vk.BufferCreateInfo{
-        .size = buffer_size,
-        .usage = .{ .transfer_src_bit = true },
-        .sharing_mode = .exclusive,
-    };
-    const staging_buffer = try vma.createBuffer(self.vma_allocator, &staging_buffer_info, &.{ .usage = .cpu_only }, null);
+    const staging_buffer = try createBuffer(self.vma_allocator, buffer_size, .{ .transfer_src_bit = true }, .cpu_only);
     defer vma.destroyBuffer(self.vma_allocator, staging_buffer.handle, staging_buffer.allocation);
 
     {
@@ -705,12 +700,7 @@ fn uploadMesh(
         vma.unmapMemory(self.vma_allocator, staging_buffer.allocation);
     }
 
-    const buffer_info = vk.BufferCreateInfo{
-        .size = buffer_size,
-        .usage = .{ .vertex_buffer_bit = true, .transfer_dst_bit = true },
-        .sharing_mode = .exclusive,
-    };
-    const buffer = try vma.createBuffer(self.vma_allocator, &buffer_info, &.{ .usage = .gpu_only }, null);
+    const buffer = try createBuffer(self.vma_allocator, buffer_size, .{ .vertex_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
     try self.buffer_deletion_queue.append(buffer);
 
     const MeshCopy = struct {
