@@ -474,6 +474,7 @@ fn initScene(self: *@This()) !void {
 
     const sampler_info = vk_init.samplerCreateInfo(.nearest, .repeat);
     const sampler = try vkd().createSampler(self.device.handle, &sampler_info, null);
+    try self.deletion_queue.append(VulkanDeleter.make(sampler, DeviceDispatch.destroySampler));
 
     const material = self.materials.getPtr("texturedmesh").?;
 

@@ -43,6 +43,7 @@ pub const device = vk.DeviceCommandFlags{
     .queuePresentKHR = true,
     .endCommandBuffer = true,
     .createSampler = true,
+    .destroySampler = true,
     .cmdBeginRenderPass = true,
     .cmdSetViewport = true,
     .cmdSetScissor = true,
