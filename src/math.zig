@@ -578,15 +578,15 @@ pub const mat = struct {
         const dot_w = vec.dot(w, eye);
 
         return .{
-            .{ u[0], v[0], -w[0], 0 },
-            .{ u[1], v[1], -w[1], 0 },
-            .{ u[2], v[2], -w[2], 0 },
-            .{ -dot_u, -dot_v, dot_w, 1 },
+            .{ u[0], v[0], w[0], 0 },
+            .{ u[1], v[1], w[1], 0 },
+            .{ u[2], v[2], w[2], 0 },
+            .{ -dot_u, -dot_v, -dot_w, 1 },
         };
     }
 
     pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
-        return lookAtDir(eye, vec.sub(target, eye), up);
+        return lookAtDir(eye, vec.sub(eye, target), up);
     }
 
     pub fn determinant(m: anytype) f32 {

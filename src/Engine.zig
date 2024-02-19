@@ -413,7 +413,7 @@ fn alignUniformBuffer(min_ubo_alignment: vk.DeviceSize, size: vk.DeviceSize) vk.
 fn update(self: *@This(), dt: f32) !void {
     // for (self.renderables.items) |*object| {
     //     var transform = object.transform_matrix;
-    //     transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
+    //     transform = math.mat.rotate(&transform, dt, .{ 1, 0, 0 });
     //     object.transform_matrix = transform;
     // }
 
@@ -423,10 +423,10 @@ fn update(self: *@This(), dt: f32) !void {
     const speed = move_speed * dt;
     const forward = math.vec.mul(self.camera.dir, speed);
     const right = math.vec.mul(self.camera.right, speed);
-    if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
-    if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
-    if (self.window.key_events[c.GLFW_KEY_A] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
-    if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, right);
+    if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_A] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, right);
+    if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
 }
 
 fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
@@ -519,10 +519,6 @@ fn initMeshes(self: *@This()) !void {
     // mesh = try self.uploadMesh(monkey_vertices);
     // try self.meshes.put("monkey", mesh);
 
-    const lost_empire_vertices = try Mesh.loadFromFile(self.allocator, "assets/lost_empire.obj");
-    const mesh = try self.uploadMesh(lost_empire_vertices);
-    try self.meshes.put("empire", mesh);
-
     // const monkey = RenderObject{
     //     .material = self.materials.getPtr("defaultmesh").?,
     //     .mesh = self.meshes.getPtr("monkey").?,
@@ -530,12 +526,27 @@ fn initMeshes(self: *@This()) !void {
     // };
     // try self.renderables.append(monkey);
 
+    const lost_empire_vertices = try Mesh.loadFromFile(self.allocator, "assets/lost_empire.obj");
+    const mesh = try self.uploadMesh(lost_empire_vertices);
+    try self.meshes.put("empire", mesh);
+
     const map = RenderObject{
         .material = self.materials.getPtr("texturedmesh").?,
         .mesh = self.meshes.getPtr("empire").?,
         .transform_matrix = math.mat.translation(.{ 5, -10, 0 }),
     };
     try self.renderables.append(map);
+
+    // const cube_vertices = try Mesh.loadFromFile(self.allocator, "assets/reference.obj");
+    // const mesh = try self.uploadMesh(cube_vertices);
+    // try self.meshes.put("empire", mesh);
+
+    // const cube = RenderObject{
+    //     .material = self.materials.getPtr("texturedmesh").?,
+    //     .mesh = self.meshes.getPtr("empire").?,
+    //     .transform_matrix = math.mat.translation(.{ 0, 0, -5 }),
+    // };
+    // try self.renderables.append(cube);
 }
 
 fn initPipelines(self: *@This()) !void {
@@ -673,6 +684,7 @@ fn currentFrame(self: *const @This()) FrameData {
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
     const view = self.camera.viewMatrix();
+    // const view = math.mat.lookAt(.{ 0, 0, 0 }, .{ 0, 0, -1 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     self.global_gpu_data.proj = projection;
