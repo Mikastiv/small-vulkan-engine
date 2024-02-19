@@ -42,6 +42,7 @@ pub const device = vk.DeviceCommandFlags{
     .queueSubmit = true,
     .queuePresentKHR = true,
     .endCommandBuffer = true,
+    .createSampler = true,
     .cmdBeginRenderPass = true,
     .cmdSetViewport = true,
     .cmdSetScissor = true,

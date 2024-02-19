@@ -45,6 +45,7 @@ const GpuObjectData = extern struct {
 };
 
 const Material = struct {
+    texture_set: vk.DescriptorSet = .null_handle,
     pipeline: vk.Pipeline,
     pipeline_layout: vk.PipelineLayout,
 };
@@ -108,6 +109,7 @@ render_pass: vk.RenderPass,
 descriptor_pool: vk.DescriptorPool,
 global_set_layout: vk.DescriptorSetLayout,
 object_set_layout: vk.DescriptorSetLayout,
+single_texture_set_layout: vk.DescriptorSetLayout,
 global_descriptor_set: vk.DescriptorSet,
 
 framebuffers: []vk.Framebuffer,
@@ -213,6 +215,11 @@ pub fn init(allocator: Allocator) !@This() {
     try deletion_queue.append(VulkanDeleter.make(upload_context.fence, DeviceDispatch.destroyFence));
     try deletion_queue.append(VulkanDeleter.make(upload_context.command_pool, DeviceDispatch.destroyCommandPool));
 
+    const texture_bind = vk_init.descriptorSetLayoutBinding(.combined_image_sampler, .{ .fragment_bit = true }, 0);
+
+    const texture_set_layout = try createDescriptorSetLayout(device.handle, &.{texture_bind});
+    try deletion_queue.append(VulkanDeleter.make(texture_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
+
     var engine: @This() = .{
         .allocator = allocator,
         .window = window,
@@ -243,6 +250,7 @@ pub fn init(allocator: Allocator) !@This() {
         .global_gpu_data = std.mem.zeroes(GpuGlobalData),
         .global_buffer = global_data_buffer,
         .upload_context = upload_context,
+        .single_texture_set_layout = texture_set_layout,
     };
 
     try engine.initPipelines();
@@ -397,11 +405,13 @@ fn alignUniformBuffer(min_ubo_alignment: vk.DeviceSize, size: vk.DeviceSize) vk.
 }
 
 fn update(self: *@This(), dt: f32) !void {
-    for (self.renderables.items) |*object| {
-        var transform = object.transform_matrix;
-        transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
-        object.transform_matrix = transform;
-    }
+    // for (self.renderables.items) |*object| {
+    //     var transform = object.transform_matrix;
+    //     transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
+    //     object.transform_matrix = transform;
+    // }
+    _ = self;
+    _ = dt;
 }
 
 fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
@@ -409,6 +419,7 @@ fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
         .{ .descriptor_count = 10, .type = .uniform_buffer },
         .{ .descriptor_count = 10, .type = .uniform_buffer_dynamic },
         .{ .descriptor_count = 10, .type = .storage_buffer },
+        .{ .descriptor_count = 10, .type = .combined_image_sampler },
     };
 
     const pool_info = vk.DescriptorPoolCreateInfo{
@@ -443,46 +454,79 @@ fn initImages(self: *@This()) !void {
 }
 
 fn initScene(self: *@This()) !void {
-    for (0..40) |x| {
-        for (0..40) |y| {
-            var x_pos: f32 = @floatFromInt(x);
-            x_pos -= 20;
-            var y_pos: f32 = @floatFromInt(y);
-            y_pos -= 20;
-            var transform = math.mat.identity(math.Mat4);
-            transform = math.mat.translate(&transform, .{ x_pos, 0, y_pos });
-            transform = math.mat.scale(&transform, .{ 0.2, 0.2, 0.2 });
-            const tri = RenderObject{
-                .material = self.materials.getPtr("defaultmesh").?,
-                .mesh = self.meshes.getPtr("triangle").?,
-                .transform_matrix = transform,
-            };
-            try self.renderables.append(tri);
-        }
-    }
+    // for (0..40) |x| {
+    //     for (0..40) |y| {
+    //         var x_pos: f32 = @floatFromInt(x);
+    //         x_pos -= 20;
+    //         var y_pos: f32 = @floatFromInt(y);
+    //         y_pos -= 20;
+    //         var transform = math.mat.identity(math.Mat4);
+    //         transform = math.mat.translate(&transform, .{ x_pos, 0, y_pos });
+    //         transform = math.mat.scale(&transform, .{ 0.2, 0.2, 0.2 });
+    //         const tri = RenderObject{
+    //             .material = self.materials.getPtr("defaultmesh").?,
+    //             .mesh = self.meshes.getPtr("triangle").?,
+    //             .transform_matrix = transform,
+    //         };
+    //         try self.renderables.append(tri);
+    //     }
+    // }
+
+    const sampler_info = vk_init.samplerCreateInfo(.nearest, .repeat);
+    const sampler = try vkd().createSampler(self.device.handle, &sampler_info, null);
+
+    const material = self.materials.getPtr("texturedmesh").?;
+
+    const alloc_info = vk.DescriptorSetAllocateInfo{
+        .descriptor_pool = self.descriptor_pool,
+        .descriptor_set_count = 1,
+        .p_set_layouts = @ptrCast(&self.single_texture_set_layout),
+    };
+
+    try vkd().allocateDescriptorSets(self.device.handle, &alloc_info, @ptrCast(&material.texture_set));
+
+    const image_buffer_info = vk.DescriptorImageInfo{
+        .sampler = sampler,
+        .image_view = self.loaded_textures.getPtr("empire_diffuse").?.image_view,
+        .image_layout = .shader_read_only_optimal,
+    };
+
+    const texture1 = vk_init.writeDescriptorImage(.combined_image_sampler, material.texture_set, &image_buffer_info, 0);
+    vkd().updateDescriptorSets(self.device.handle, 1, @ptrCast(&texture1), 0, null);
 }
 
 fn initMeshes(self: *@This()) !void {
-    const triangle_vertices = try makeTriangle(self.allocator);
-    var mesh = try self.uploadMesh(triangle_vertices);
-    try self.meshes.put("triangle", mesh);
-    const monkey_vertices = try Mesh.loadFromFile(self.allocator, "assets/monkey_smooth.obj");
-    mesh = try self.uploadMesh(monkey_vertices);
-    try self.meshes.put("monkey", mesh);
+    // const triangle_vertices = try makeTriangle(self.allocator);
+    // var mesh = try self.uploadMesh(triangle_vertices);
+    // try self.meshes.put("triangle", mesh);
+    // const monkey_vertices = try Mesh.loadFromFile(self.allocator, "assets/monkey_smooth.obj");
+    // mesh = try self.uploadMesh(monkey_vertices);
+    // try self.meshes.put("monkey", mesh);
 
-    const monkey = RenderObject{
-        .material = self.materials.getPtr("defaultmesh").?,
-        .mesh = self.meshes.getPtr("monkey").?,
-        .transform_matrix = math.mat.translation(.{ 0, 3, -3 }),
+    const lost_empire_vertices = try Mesh.loadFromFile(self.allocator, "assets/lost_empire.obj");
+    const mesh = try self.uploadMesh(lost_empire_vertices);
+    try self.meshes.put("empire", mesh);
+
+    // const monkey = RenderObject{
+    //     .material = self.materials.getPtr("defaultmesh").?,
+    //     .mesh = self.meshes.getPtr("monkey").?,
+    //     .transform_matrix = math.mat.translation(.{ 0, 3, -3 }),
+    // };
+    // try self.renderables.append(monkey);
+
+    const map = RenderObject{
+        .material = self.materials.getPtr("texturedmesh").?,
+        .mesh = self.meshes.getPtr("empire").?,
+        .transform_matrix = math.mat.translation(.{ 5, -10, 0 }),
     };
-    try self.renderables.append(monkey);
+    try self.renderables.append(map);
 }
 
 fn initPipelines(self: *@This()) !void {
     const triangle_mesh_shader_vert = try createShaderModule(self.device.handle, &Shaders.triangle_mesh_vert);
     defer vkd().destroyShaderModule(self.device.handle, triangle_mesh_shader_vert, null);
-    const triangle_shader_frag = try createShaderModule(self.device.handle, &Shaders.default_lit);
-    defer vkd().destroyShaderModule(self.device.handle, triangle_shader_frag, null);
+    const textured_shader_frag = try createShaderModule(self.device.handle, &Shaders.textured_lit);
+    defer vkd().destroyShaderModule(self.device.handle, textured_shader_frag, null);
 
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(self.allocator);
     defer shader_stages.deinit();
@@ -492,7 +536,7 @@ fn initPipelines(self: *@This()) !void {
         .size = @sizeOf(MeshPushConstants),
         .stage_flags = .{ .vertex_bit = true },
     };
-    const set_layouts = [_]vk.DescriptorSetLayout{ self.global_set_layout, self.object_set_layout };
+    const set_layouts = [_]vk.DescriptorSetLayout{ self.global_set_layout, self.object_set_layout, self.single_texture_set_layout };
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
         .push_constant_range_count = 1,
         .p_push_constant_ranges = @ptrCast(&push_constant),
@@ -504,7 +548,7 @@ fn initPipelines(self: *@This()) !void {
     try self.deletion_queue.append(VulkanDeleter.make(pipeline_layout, DeviceDispatch.destroyPipelineLayout));
 
     try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, triangle_mesh_shader_vert));
-    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, triangle_shader_frag));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, textured_shader_frag));
     var pipeline_builder = PipelineBuilder{
         .shader_stages = shader_stages,
         .vertex_input_info = vk.PipelineVertexInputStateCreateInfo{},
@@ -542,7 +586,7 @@ fn initPipelines(self: *@This()) !void {
     if (pipeline == null) return error.PipelineCreationFailed;
     try self.deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
 
-    try createMaterial(&self.materials, pipeline.?, pipeline_layout, "defaultmesh");
+    try createMaterial(&self.materials, pipeline.?, pipeline_layout, "texturedmesh");
 }
 
 fn createFrameData(
@@ -612,8 +656,8 @@ fn currentFrame(self: *const @This()) FrameData {
 }
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
-    const camera_pos = math.Vec3{ 0, 3, -10 };
-    const view = math.mat.lookAt(camera_pos, .{ 0, 0, 0 }, .{ 0, 1, 0 });
+    const camera_pos = math.Vec3{ 0, 6, 10 };
+    const view = math.mat.lookAt(camera_pos, .{ 0, 6, 0 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     self.global_gpu_data.proj = projection;
@@ -657,6 +701,9 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
             vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
             vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 0, 1, @ptrCast(&self.global_descriptor_set), 1, @ptrCast(&uniform_offset));
             vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 1, 1, @ptrCast(&current_frame.objects_descriptor), 0, null);
+            if (object.material.texture_set != .null_handle) {
+                vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 2, 1, @ptrCast(&object.material.texture_set), 0, null);
+            }
             last_material = object.material;
         }
 

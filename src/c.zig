@@ -4,7 +4,6 @@ pub usingnamespace @cImport({
     @cInclude("cimgui.h");
     @cInclude("cimgui_impl_vulkan.h");
     @cInclude("cimgui_impl_glfw.h");
-    @cInclude("tiny_obj_loader.h");
 });
 
 const vk = @import("vulkan-zig");

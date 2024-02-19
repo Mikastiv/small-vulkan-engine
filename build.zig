@@ -36,15 +36,12 @@ pub fn build(b: *std.Build) void {
     shaders.add("colored_triangle_frag", shader_base_path ++ "colored_triangle.frag", .{});
     shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
     shaders.add("default_lit", shader_base_path ++ "default_lit.frag", .{});
+    shaders.add("textured_lit", shader_base_path ++ "textured_lit.frag", .{});
 
     const wf = b.addWriteFiles();
     const stb_image = wf.add("stb_image.c",
         \\#define STB_IMAGE_IMPLEMENTATION
         \\#include "stb_image.h"
-    );
-    const tinyobj = wf.add("tinyobj.c",
-        \\#define TINYOBJ_LOADER_C_IMPLEMENTATION
-        \\#include "tiny_obj_loader.h"
     );
 
     const cimgui = b.addStaticLibrary(.{
@@ -90,9 +87,7 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "lib/cimgui" });
     exe.addIncludePath(.{ .path = "lib/cimgui/imgui" });
     exe.addIncludePath(.{ .path = "lib/stb_image" });
-    exe.addIncludePath(.{ .path = "lib/tinyobj" });
     exe.addCSourceFile(.{ .file = stb_image });
-    exe.addCSourceFile(.{ .file = tinyobj });
 
     b.installArtifact(exe);
 

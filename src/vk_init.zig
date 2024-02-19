@@ -182,3 +182,36 @@ pub fn submitInfo(cmds: []const vk.CommandBuffer) vk.SubmitInfo {
         .p_command_buffers = cmds.ptr,
     };
 }
+
+pub fn samplerCreateInfo(filter: vk.Filter, address_mode: vk.SamplerAddressMode) vk.SamplerCreateInfo {
+    return .{
+        .mag_filter = filter,
+        .min_filter = filter,
+        .mipmap_mode = .nearest,
+        .address_mode_u = address_mode,
+        .address_mode_v = address_mode,
+        .address_mode_w = address_mode,
+        .mip_lod_bias = 0,
+        .max_anisotropy = 0,
+        .anisotropy_enable = vk.FALSE,
+        .compare_enable = vk.FALSE,
+        .compare_op = .never,
+        .min_lod = 0,
+        .max_lod = 0,
+        .border_color = .float_transparent_black,
+        .unnormalized_coordinates = vk.FALSE,
+    };
+}
+
+pub fn writeDescriptorImage(descriptor_type: vk.DescriptorType, dst_set: vk.DescriptorSet, image_info: *const vk.DescriptorImageInfo, binding: u32) vk.WriteDescriptorSet {
+    return .{
+        .dst_binding = binding,
+        .dst_set = dst_set,
+        .descriptor_count = 1,
+        .descriptor_type = descriptor_type,
+        .dst_array_element = 0,
+        .p_buffer_info = undefined,
+        .p_image_info = @ptrCast(image_info),
+        .p_texel_buffer_view = undefined,
+    };
+}
