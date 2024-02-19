@@ -72,7 +72,11 @@ pub fn imageCreateInfo(format: vk.Format, usage: vk.ImageUsageFlags, extent: vk.
     return .{
         .image_type = .@"2d",
         .format = format,
-        .extent = extent,
+        .extent = .{
+            .width = extent.width,
+            .height = extent.height,
+            .depth = 1,
+        },
         .mip_levels = 1,
         .array_layers = 1,
         .samples = .{ .@"1_bit" = true },

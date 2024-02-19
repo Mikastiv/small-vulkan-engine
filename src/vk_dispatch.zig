@@ -52,4 +52,6 @@ pub const device = vk.DeviceCommandFlags{
     .cmdPushConstants = true,
     .cmdBindDescriptorSets = true,
     .cmdCopyBuffer = true,
+    .cmdPipelineBarrier = true,
+    .cmdCopyBufferToImage = true,
 };

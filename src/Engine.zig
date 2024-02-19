@@ -9,6 +9,7 @@ const vk_init = @import("vk_init.zig");
 const Mesh = @import("Mesh.zig");
 const math = @import("math.zig");
 const vma = @import("vma-zig");
+const texture = @import("texture.zig");
 
 const vki = vkk.dispatch.vki;
 const vkd = vkk.dispatch.vkd;
@@ -72,6 +73,11 @@ const UploadContext = struct {
     command_buffer: vk.CommandBuffer,
 };
 
+const Texture = struct {
+    image: vma.AllocatedImage,
+    image_view: vk.ImageView,
+};
+
 const DeletionQueue = std.ArrayList(VulkanDeleter);
 const BufferDeletionQueue = std.ArrayList(vma.AllocatedBuffer);
 const ImageDeletionQueue = std.ArrayList(vma.AllocatedImage);
@@ -110,6 +116,7 @@ frames: [frame_overlap]FrameData,
 renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
+loaded_textures: std.StringHashMap(Texture),
 
 global_gpu_data: GpuGlobalData,
 global_buffer: vma.AllocatedBuffer,
@@ -215,6 +222,7 @@ pub fn init(allocator: Allocator) !@This() {
         .meshes = std.StringHashMap(Mesh).init(allocator),
         .materials = std.StringHashMap(Material).init(allocator),
         .renderables = std.ArrayList(RenderObject).init(allocator),
+        .loaded_textures = std.StringHashMap(Texture).init(allocator),
         .instance = instance,
         .surface = surface,
         .device = device,
@@ -238,6 +246,7 @@ pub fn init(allocator: Allocator) !@This() {
     };
 
     try engine.initPipelines();
+    try engine.initImages();
     try engine.initMeshes();
     try engine.initScene();
 
@@ -247,11 +256,14 @@ pub fn init(allocator: Allocator) !@This() {
 pub fn deinit(self: *@This()) void {
     self.renderables.deinit();
     self.materials.deinit();
-    var it = self.meshes.iterator();
-    while (it.next()) |entry| {
-        entry.value_ptr.vertices.deinit();
+    {
+        var it = self.meshes.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.vertices.deinit();
+        }
     }
     self.meshes.deinit();
+    self.loaded_textures.deinit();
     flushImageDeletionQueue(self.vma_allocator, self.image_deletion_queue.items);
     self.image_deletion_queue.deinit();
     flushBufferDeletionQueue(self.vma_allocator, self.buffer_deletion_queue.items);
@@ -296,7 +308,24 @@ pub fn waitForIdle(self: *const @This()) !void {
     try vkd().deviceWaitIdle(self.device.handle);
 }
 
-fn immediateSubmit(self: *const @This(), submit_ctx: anytype) !void {
+pub fn createBuffer(
+    vma_allocator: vma.Allocator,
+    size: vk.DeviceSize,
+    usage: vk.BufferUsageFlags,
+    memory_usage: vma.MemoryUsage,
+) !vma.AllocatedBuffer {
+    const buffer_info = vk.BufferCreateInfo{
+        .size = size,
+        .usage = usage,
+        .sharing_mode = .exclusive,
+    };
+
+    const alloc_info = vma.AllocationCreateInfo{ .usage = memory_usage };
+
+    return vma.createBuffer(vma_allocator, &buffer_info, &alloc_info, null);
+}
+
+pub fn immediateSubmit(self: *const @This(), submit_ctx: anytype) !void {
     const cmd = self.upload_context.command_buffer;
 
     const cmd_begin_info = vk_init.commandBufferBeginInfo(.{ .one_time_submit_bit = true });
@@ -403,21 +432,14 @@ fn createDescriptorSetLayout(
     return try vkd().createDescriptorSetLayout(device, &set_info, null);
 }
 
-fn createBuffer(
-    vma_allocator: vma.Allocator,
-    size: vk.DeviceSize,
-    usage: vk.BufferUsageFlags,
-    memory_usage: vma.MemoryUsage,
-) !vma.AllocatedBuffer {
-    const buffer_info = vk.BufferCreateInfo{
-        .size = size,
-        .usage = usage,
-        .sharing_mode = .exclusive,
-    };
+fn initImages(self: *@This()) !void {
+    const lost_empire_image = try texture.loadFromFile(self, "assets/lost_empire-RGBA.png");
 
-    const alloc_info = vma.AllocationCreateInfo{ .usage = memory_usage };
+    const image_info = vk_init.imageViewCreateInfo(.r8g8b8a8_srgb, lost_empire_image.handle, .{ .color_bit = true });
+    const image_view = try vkd().createImageView(self.device.handle, &image_info, null);
+    try self.deletion_queue.append(VulkanDeleter.make(image_view, DeviceDispatch.destroyImageView));
 
-    return vma.createBuffer(vma_allocator, &buffer_info, &alloc_info, null);
+    try self.loaded_textures.put("empire_diffuse", .{ .image = lost_empire_image, .image_view = image_view });
 }
 
 fn initScene(self: *@This()) !void {
