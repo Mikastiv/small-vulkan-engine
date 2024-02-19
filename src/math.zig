@@ -504,13 +504,13 @@ pub const mat = struct {
 
         var out = identity(Mat4);
         out[0][0] = c + t[0] * a[0];
-        out[0][1] = t[0] * a[1] - s * a[2];
-        out[0][2] = t[0] * a[2] + s * a[1];
-        out[1][0] = t[1] * a[0] + s * a[2];
+        out[0][1] = t[0] * a[1] + s * a[2];
+        out[0][2] = t[0] * a[2] - s * a[1];
+        out[1][0] = t[1] * a[0] - s * a[2];
         out[1][1] = c + t[1] * a[1];
-        out[1][2] = t[1] * a[2] - s * a[0];
-        out[2][0] = t[2] * a[0] - s * a[1];
-        out[2][1] = t[2] * a[1] + s * a[0];
+        out[1][2] = t[1] * a[2] + s * a[0];
+        out[2][0] = t[2] * a[0] + s * a[1];
+        out[2][1] = t[2] * a[1] - s * a[0];
         out[2][2] = c + t[2] * a[2];
         return out;
     }
