@@ -51,7 +51,7 @@ pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !std.Arr
     var mesh = try obj_loader.parse_file(allocator, filename);
     defer mesh.deinit();
 
-    var vertices = try std.ArrayList(Vertex).initCapacity(allocator, 200000);
+    var vertices = std.ArrayList(Vertex).init(allocator);
     errdefer vertices.deinit();
 
     var i: u32 = 0;
@@ -77,10 +77,12 @@ pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !std.Arr
 
                 // Triangulate the polygon
                 if (vx_index > 2) {
-                    const v0 = vertices.items[vertices.items.len - 3];
-                    const v1 = vertices.items[vertices.items.len - 1];
+                    var v0 = vertices.items[vertices.items.len - 3];
+                    var v1 = vertices.items[vertices.items.len - 1];
                     try vertices.append(v0);
                     try vertices.append(v1);
+                    v0 = std.mem.zeroes(Vertex);
+                    v1 = std.mem.zeroes(Vertex);
                 }
 
                 try vertices.append(vx);
