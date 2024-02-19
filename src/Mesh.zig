@@ -77,12 +77,9 @@ pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !std.Arr
 
                 // Triangulate the polygon
                 if (vx_index > 2) {
-                    var v0 = vertices.items[vertices.items.len - 3];
-                    var v1 = vertices.items[vertices.items.len - 1];
-                    try vertices.append(v0);
-                    try vertices.append(v1);
-                    v0 = std.mem.zeroes(Vertex);
-                    v1 = std.mem.zeroes(Vertex);
+                    const v0 = vertices.items[vertices.items.len - 3];
+                    const v1 = vertices.items[vertices.items.len - 1];
+                    try vertices.appendSlice(&.{ v0, v1 });
                 }
 
                 try vertices.append(vx);

@@ -10,6 +10,7 @@ const Mesh = @import("Mesh.zig");
 const math = @import("math.zig");
 const vma = @import("vma-zig");
 const texture = @import("texture.zig");
+const Camera = @import("Camera.zig");
 
 const vki = vkk.dispatch.vki;
 const vkd = vkk.dispatch.vkd;
@@ -23,6 +24,8 @@ const window_title = "Vulkan Engine";
 
 const frame_overlap = 2;
 const max_objects = 10000;
+const camera_sensivity = 0.5;
+const move_speed = 10;
 
 const MeshPushConstants = extern struct {
     data: math.Vec4 align(16),
@@ -124,6 +127,8 @@ global_gpu_data: GpuGlobalData,
 global_buffer: vma.AllocatedBuffer,
 
 upload_context: UploadContext,
+
+camera: Camera,
 
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
@@ -251,6 +256,7 @@ pub fn init(allocator: Allocator) !@This() {
         .global_buffer = global_data_buffer,
         .upload_context = upload_context,
         .single_texture_set_layout = texture_set_layout,
+        .camera = Camera.init(.{ 0, 6, 10 }),
     };
 
     try engine.initPipelines();
@@ -410,8 +416,17 @@ fn update(self: *@This(), dt: f32) !void {
     //     transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
     //     object.transform_matrix = transform;
     // }
-    _ = self;
-    _ = dt;
+
+    const offset = math.vec.mul(self.window.mouseOffset(), camera_sensivity);
+    self.camera.update(offset);
+
+    const speed = move_speed * dt;
+    const forward = math.vec.mul(self.camera.dir, speed);
+    const right = math.vec.mul(self.camera.right, speed);
+    if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_A] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
+    if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, right);
 }
 
 fn createDescriptorPool(device: vk.Device) !vk.DescriptorPool {
@@ -657,8 +672,7 @@ fn currentFrame(self: *const @This()) FrameData {
 }
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
-    const camera_pos = math.Vec3{ 0, 6, 10 };
-    const view = math.mat.lookAt(camera_pos, .{ 0, 6, 0 }, .{ 0, 1, 0 });
+    const view = self.camera.viewMatrix();
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     self.global_gpu_data.proj = projection;
