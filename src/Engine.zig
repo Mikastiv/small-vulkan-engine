@@ -475,7 +475,7 @@ fn initMeshes(self: *@This()) !void {
     const widget = RenderObject{
         .material = self.materials.getPtr("line").?,
         .mesh = self.meshes.getPtr("widget").?,
-        .transform_matrix = math.mat.translation(.{ 0, 3, 0 }),
+        .transform_matrix = math.mat.translation(.{ 0, 1.5, 0 }),
     };
     try self.renderables.append(widget);
 
