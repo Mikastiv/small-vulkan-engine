@@ -472,7 +472,7 @@ fn initMeshes(self: *@This()) !void {
     const widget = RenderObject{
         .material = self.materials.getPtr("line").?,
         .mesh = self.meshes.getPtr("widget").?,
-        .transform_matrix = math.mat.translation(.{ 0, 6, 0 }),
+        .transform_matrix = math.mat.translation(.{ 0, 3, 0 }),
     };
     try self.renderables.append(widget);
 
@@ -580,7 +580,7 @@ fn currentFrame(self: *const @This()) FrameData {
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
     const view = self.camera.viewMatrix();
-    // const view = math.mat.lookAt(.{ 0, 3, 0 }, .{ 0, 3, -1 }, .{ 0, 1, 0 });
+    // const view = math.mat.lookAt(.{ -3, 3, 6 }, .{ 0, 3, 0 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     self.global_gpu_data.proj = projection;
