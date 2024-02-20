@@ -5,6 +5,7 @@ const c = @import("c.zig");
 const vma = @import("vma-zig");
 const Engine = @import("Engine.zig");
 const vk_init = @import("vk_init.zig");
+const vk_utils = @import("vk_utils.zig");
 
 const vkd = vkk.dispatch.vkd;
 
@@ -20,7 +21,7 @@ pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImag
     const image_size: vk.DeviceSize = @intCast(tex_width * tex_height * 4);
     const image_format = vk.Format.r8g8b8a8_srgb;
 
-    const staging_buffer = try Engine.createBuffer(engine.vma_allocator, image_size, .{ .transfer_src_bit = true }, .cpu_only);
+    const staging_buffer = try vk_utils.createBuffer(engine.vma_allocator, image_size, .{ .transfer_src_bit = true }, .cpu_only);
     defer vma.destroyBuffer(engine.vma_allocator, staging_buffer.handle, staging_buffer.allocation);
 
     {
