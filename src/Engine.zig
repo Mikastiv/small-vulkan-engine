@@ -25,7 +25,7 @@ const window_title = "Vulkan Engine";
 
 const frame_overlap = 2;
 const max_objects = 10000;
-const camera_sensivity = 0.5;
+const camera_sensivity = 0.3;
 const move_speed = 10;
 
 const VulkanDeleter = vk_utils.VulkanDeleter;
@@ -370,7 +370,7 @@ fn alignUniformBuffer(min_ubo_alignment: vk.DeviceSize, size: vk.DeviceSize) vk.
 fn update(self: *@This(), dt: f32) !void {
     // for (self.renderables.items) |*object| {
     //     var transform = object.transform_matrix;
-    //     transform = math.mat.rotate(&transform, dt, .{ 1, 0, 0 });
+    //     transform = math.mat.rotate(&transform, dt, .{ 0, 1, 0 });
     //     object.transform_matrix = transform;
     // }
 
@@ -380,10 +380,13 @@ fn update(self: *@This(), dt: f32) !void {
     const speed = move_speed * dt;
     const forward = math.vec.mul(self.camera.dir, speed);
     const right = math.vec.mul(self.camera.right, speed);
+    const up = math.vec.mul(math.Vec3{ 0, 1, 0 }, speed);
     if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
     if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
     if (self.window.key_events[c.GLFW_KEY_A] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, right);
     if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
+    if (self.window.key_events[c.GLFW_KEY_SPACE] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, up);
+    if (self.window.key_events[c.GLFW_KEY_LEFT_SHIFT] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, up);
 }
 
 fn initImages(self: *@This()) !void {

@@ -94,7 +94,7 @@ pub fn framebufferSize(self: *const @This()) Size {
 
 pub fn keyPressed(self: *@This(), key: c_int) bool {
     const pressed = self.key_events[@intCast(key)];
-    self.key_events[@intCast(key)] = 0;
+    self.key_events[@intCast(key)] = c.GLFW_RELEASE;
     return pressed == c.GLFW_PRESS;
 }
 

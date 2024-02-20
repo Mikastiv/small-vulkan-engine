@@ -32,8 +32,6 @@ pub fn build(b: *std.Build) void {
     const shaders = vkgen.ShaderCompileStep.create(b, &.{ "glslc", "--target-env=vulkan1.1" }, "-o");
     shaders.add("triangle_vert", shader_base_path ++ "triangle.vert", .{});
     shaders.add("triangle_frag", shader_base_path ++ "triangle.frag", .{});
-    shaders.add("colored_triangle_vert", shader_base_path ++ "colored_triangle.vert", .{});
-    shaders.add("colored_triangle_frag", shader_base_path ++ "colored_triangle.frag", .{});
     shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
     shaders.add("default_lit", shader_base_path ++ "default_lit.frag", .{});
     shaders.add("textured_lit", shader_base_path ++ "textured_lit.frag", .{});

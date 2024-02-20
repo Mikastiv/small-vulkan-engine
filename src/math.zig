@@ -1,5 +1,7 @@
 const std = @import("std");
 
+// Math library for Vulkan
+
 pub const Vec2 = [2]f32;
 pub const Vec3 = [3]f32;
 pub const Vec4 = [4]f32;
@@ -520,20 +522,20 @@ pub const mat = struct {
 
         var out: Mat4 = undefined;
 
-        var a = vec.mul(m[0], rot[0][0]);
-        var b = vec.mul(m[1], rot[0][1]);
-        var c = vec.mul(m[2], rot[0][2]);
+        const a = vec.mul(m[0], rot[0][0]);
+        const b = vec.mul(m[1], rot[0][1]);
+        const c = vec.mul(m[2], rot[0][2]);
         out[0] = vec.add(vec.add(a, b), c);
 
-        a = vec.mul(m[0], rot[1][0]);
-        b = vec.mul(m[1], rot[1][1]);
-        c = vec.mul(m[2], rot[1][2]);
-        out[1] = vec.add(vec.add(a, b), c);
+        const d = vec.mul(m[0], rot[1][0]);
+        const e = vec.mul(m[1], rot[1][1]);
+        const f = vec.mul(m[2], rot[1][2]);
+        out[1] = vec.add(vec.add(d, e), f);
 
-        a = vec.mul(m[0], rot[2][0]);
-        b = vec.mul(m[1], rot[2][1]);
-        c = vec.mul(m[2], rot[2][2]);
-        out[2] = vec.add(vec.add(a, b), c);
+        const g = vec.mul(m[0], rot[2][0]);
+        const h = vec.mul(m[1], rot[2][1]);
+        const i = vec.mul(m[2], rot[2][2]);
+        out[2] = vec.add(vec.add(g, h), i);
 
         out[3] = m[3];
 
@@ -614,10 +616,7 @@ pub const mat = struct {
                 const cofactor2 = m[0][1] * subfactor1 - m[1][1] * subfactor3 + m[3][1] * subfactor5;
                 const cofactor3 = m[0][1] * subfactor2 - m[1][1] * subfactor4 + m[2][1] * subfactor5;
 
-                break :blk m[0][0] * cofactor0 -
-                    m[1][0] * cofactor1 +
-                    m[2][0] * cofactor2 -
-                    m[3][0] * cofactor3;
+                break :blk m[0][0] * cofactor0 - m[1][0] * cofactor1 + m[2][0] * cofactor2 - m[3][0] * cofactor3;
             },
             else => unsupportedType(T),
         };
