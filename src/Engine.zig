@@ -43,10 +43,6 @@ const GpuGlobalData = extern struct {
     sunlight_color: math.Vec4 align(16),
 };
 
-const GpuObjectData = extern struct {
-    model_matrix: math.Mat4 align(16),
-};
-
 const Material = struct {
     texture_set: vk.DescriptorSet = .null_handle,
     pipeline: vk.Pipeline,
@@ -66,9 +62,6 @@ const FrameData = struct {
 
     command_pool: vk.CommandPool,
     command_buffer: vk.CommandBuffer,
-
-    objects_buffer: vma.AllocatedBuffer,
-    objects_descriptor: vk.DescriptorSet,
 };
 
 const UploadContext = struct {
@@ -111,7 +104,6 @@ render_pass: vk.RenderPass,
 
 descriptor_pool: vk.DescriptorPool,
 global_set_layout: vk.DescriptorSetLayout,
-object_set_layout: vk.DescriptorSetLayout,
 single_texture_set_layout: vk.DescriptorSetLayout,
 global_descriptor_set: vk.DescriptorSet,
 
@@ -203,17 +195,12 @@ pub fn init(allocator: Allocator) !@This() {
 
     writeGlobalDescriptorSet(device.handle, global_data_buffer.handle, global_descriptor_set);
 
-    const object_binding = vk_init.descriptorSetLayoutBinding(.storage_buffer, .{ .vertex_bit = true }, 0);
-    const object_set_layout = try createDescriptorSetLayout(device.handle, &.{object_binding});
-    try deletion_queue.append(VulkanDeleter.make(object_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
-
-    const frames = try createFrameData(vma_allocator, device.handle, physical_device.graphics_family_index, descriptor_pool, object_set_layout);
+    const frames = try createFrameData(device.handle, physical_device.graphics_family_index);
     for (frames) |frame| {
         try deletion_queue.append(VulkanDeleter.make(frame.command_pool, DeviceDispatch.destroyCommandPool));
         try deletion_queue.append(VulkanDeleter.make(frame.render_fence, DeviceDispatch.destroyFence));
         try deletion_queue.append(VulkanDeleter.make(frame.render_semaphore, DeviceDispatch.destroySemaphore));
         try deletion_queue.append(VulkanDeleter.make(frame.present_semaphore, DeviceDispatch.destroySemaphore));
-        try buffer_deletion_queue.append(frame.objects_buffer);
     }
 
     const upload_context = try createUploadContext(device.handle, device.physical_device.graphics_family_index);
@@ -249,7 +236,6 @@ pub fn init(allocator: Allocator) !@This() {
         .framebuffers = framebuffers,
         .frames = frames,
         .global_set_layout = global_set_layout,
-        .object_set_layout = object_set_layout,
         .descriptor_pool = descriptor_pool,
         .global_descriptor_set = global_descriptor_set,
         .global_gpu_data = std.mem.zeroes(GpuGlobalData),
@@ -563,7 +549,7 @@ fn initPipelines(self: *@This()) !void {
         .size = @sizeOf(MeshPushConstants),
         .stage_flags = .{ .vertex_bit = true },
     };
-    const set_layouts = [_]vk.DescriptorSetLayout{ self.global_set_layout, self.object_set_layout, self.single_texture_set_layout };
+    const set_layouts = [_]vk.DescriptorSetLayout{ self.global_set_layout, self.single_texture_set_layout };
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{
         .push_constant_range_count = 1,
         .p_push_constant_ranges = @ptrCast(&push_constant),
@@ -617,11 +603,8 @@ fn initPipelines(self: *@This()) !void {
 }
 
 fn createFrameData(
-    vma_allocator: vma.Allocator,
     device: vk.Device,
     graphics_family_index: u32,
-    descriptor_pool: vk.DescriptorPool,
-    object_set_layout: vk.DescriptorSetLayout,
 ) ![frame_overlap]FrameData {
     const command_pool_info = vk_init.commandPoolCreateInfo(
         .{ .reset_command_buffer_bit = true },
@@ -637,26 +620,9 @@ fn createFrameData(
 
         const sync = try createSyncObjects(device);
 
-        const objects_buffer = try createBuffer(vma_allocator, @sizeOf(GpuObjectData) * max_objects, .{ .storage_buffer_bit = true }, .cpu_to_gpu);
-
-        const object_descriptor_set = try createDescriptorSet(device, descriptor_pool, &.{object_set_layout});
-
-        const object_buffer_info = vk.DescriptorBufferInfo{
-            .buffer = objects_buffer.handle,
-            .offset = 0,
-            .range = @sizeOf(GpuObjectData) * max_objects,
-        };
-
-        const object_write = vk_init.writeDescriptorBuffer(.storage_buffer, object_descriptor_set, &object_buffer_info, 0);
-
-        const writes = [_]vk.WriteDescriptorSet{object_write};
-        vkd().updateDescriptorSets(device, writes.len, &writes, 0, null);
-
         ptr.render_semaphore = sync.render_semaphore;
         ptr.present_semaphore = sync.present_semaphore;
         ptr.render_fence = sync.render_fence;
-        ptr.objects_buffer = objects_buffer;
-        ptr.objects_descriptor = object_descriptor_set;
     }
 
     return frames;
@@ -693,8 +659,6 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
     const framed: f32 = @as(f32, @floatFromInt(self.frame_number)) / 120.0;
     self.global_gpu_data.ambient_color = .{ @sin(framed) + 0.5, 0, @cos(framed), 1 };
 
-    const current_frame = self.currentFrame();
-
     const alignment = alignUniformBuffer(self.device.physical_device.properties.limits.min_uniform_buffer_offset_alignment, @sizeOf(GpuGlobalData));
     const frame_index = self.frame_number % frame_overlap;
     const uniform_offset = alignment * frame_index;
@@ -707,17 +671,6 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
         vma.unmapMemory(self.vma_allocator, self.global_buffer.allocation);
     }
 
-    {
-        const data = try vma.mapMemory(self.vma_allocator, current_frame.objects_buffer.allocation);
-        const ptr: [*]GpuObjectData = @ptrCast(@alignCast(data));
-
-        for (objects, 0..) |object, i| {
-            ptr[i].model_matrix = object.transform_matrix;
-        }
-
-        vma.unmapMemory(self.vma_allocator, current_frame.objects_buffer.allocation);
-    }
-
     var last_mesh: ?*Mesh = null;
     var last_material: ?*Material = null;
     for (objects, 0..) |object, i| {
@@ -727,9 +680,8 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
         if (bind_material) {
             vkd().cmdBindPipeline(cmd, .graphics, object.material.pipeline);
             vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 0, 1, @ptrCast(&self.global_descriptor_set), 1, @ptrCast(&uniform_offset));
-            vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 1, 1, @ptrCast(&current_frame.objects_descriptor), 0, null);
             if (object.material.texture_set != .null_handle) {
-                vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 2, 1, @ptrCast(&object.material.texture_set), 0, null);
+                vkd().cmdBindDescriptorSets(cmd, .graphics, object.material.pipeline_layout, 1, 1, @ptrCast(&object.material.texture_set), 0, null);
             }
             last_material = object.material;
         }

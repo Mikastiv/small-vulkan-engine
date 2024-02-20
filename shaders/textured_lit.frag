@@ -16,7 +16,7 @@ layout (set = 0, binding = 0) uniform GlobalData {
 	vec4 sunlight_color;
 } global_data;
 
-layout (set = 2, binding = 0) uniform sampler2D tex1;
+layout (set = 1, binding = 0) uniform sampler2D tex1;
 
 void main()
 {
