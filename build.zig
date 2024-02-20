@@ -37,6 +37,8 @@ pub fn build(b: *std.Build) void {
     shaders.add("triangle_mesh_vert", shader_base_path ++ "triangle_mesh.vert", .{});
     shaders.add("default_lit", shader_base_path ++ "default_lit.frag", .{});
     shaders.add("textured_lit", shader_base_path ++ "textured_lit.frag", .{});
+    shaders.add("widget_3d_vert", shader_base_path ++ "widget_3d.vert", .{});
+    shaders.add("widget_3d_frag", shader_base_path ++ "widget_3d.frag", .{});
 
     const wf = b.addWriteFiles();
     const stb_image = wf.add("stb_image.c",

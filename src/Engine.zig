@@ -375,8 +375,8 @@ fn update(self: *@This(), dt: f32) !void {
     const speed = move_speed * dt;
     const forward = math.vec.mul(self.camera.dir, speed);
     const right = math.vec.mul(self.camera.right, speed);
-    if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
-    if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_W] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, forward);
+    if (self.window.key_events[c.GLFW_KEY_S] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, forward);
     if (self.window.key_events[c.GLFW_KEY_A] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, right);
     if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
 }
@@ -450,8 +450,8 @@ fn initMeshes(self: *@This()) !void {
     // try self.renderables.append(monkey);
 
     const lost_empire_vertices = try Mesh.loadFromFile(self.allocator, "assets/lost_empire.obj");
-    const mesh = try self.uploadMesh(lost_empire_vertices);
-    try self.meshes.put("empire", mesh);
+    const empire_mesh = try self.uploadMesh(lost_empire_vertices);
+    try self.meshes.put("empire", empire_mesh);
 
     const map = RenderObject{
         .material = self.materials.getPtr("texturedmesh").?,
@@ -459,6 +459,17 @@ fn initMeshes(self: *@This()) !void {
         .transform_matrix = math.mat.translation(.{ 5, -10, 0 }),
     };
     try self.renderables.append(map);
+
+    const widget_vertices = try makeAxisLines(self.allocator);
+    const widget_mesh = try self.uploadMesh(widget_vertices);
+    try self.meshes.put("widget", widget_mesh);
+
+    const widget = RenderObject{
+        .material = self.materials.getPtr("line").?,
+        .mesh = self.meshes.getPtr("widget").?,
+        .transform_matrix = math.mat.translation(.{ 0, 6, 0 }),
+    };
+    try self.renderables.append(widget);
 
     // const cube_vertices = try Mesh.loadFromFile(self.allocator, "assets/reference.obj");
     // const mesh = try self.uploadMesh(cube_vertices);
@@ -477,6 +488,11 @@ fn initPipelines(self: *@This()) !void {
     defer vkd().destroyShaderModule(self.device.handle, triangle_mesh_shader_vert, null);
     const textured_shader_frag = try vk_utils.createShaderModule(self.device.handle, &Shaders.textured_lit);
     defer vkd().destroyShaderModule(self.device.handle, textured_shader_frag, null);
+
+    const widget_3d_shader_vert = try vk_utils.createShaderModule(self.device.handle, &Shaders.widget_3d_vert);
+    defer vkd().destroyShaderModule(self.device.handle, widget_3d_shader_vert, null);
+    const widget_3d_shader_frag = try vk_utils.createShaderModule(self.device.handle, &Shaders.widget_3d_frag);
+    defer vkd().destroyShaderModule(self.device.handle, widget_3d_shader_frag, null);
 
     var shader_stages = std.ArrayList(vk.PipelineShaderStageCreateInfo).init(self.allocator);
     defer shader_stages.deinit();
@@ -537,6 +553,19 @@ fn initPipelines(self: *@This()) !void {
     try self.deletion_queue.append(VulkanDeleter.make(pipeline.?, DeviceDispatch.destroyPipeline));
 
     try createMaterial(&self.materials, pipeline.?, pipeline_layout, "texturedmesh");
+
+    shader_stages.clearRetainingCapacity();
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .vertex_bit = true }, widget_3d_shader_vert));
+    try shader_stages.append(vk_init.pipelineShaderStageCreateInfo(.{ .fragment_bit = true }, widget_3d_shader_frag));
+    pipeline_builder.shader_stages = shader_stages;
+
+    pipeline_builder.input_assembly = vk_init.inputAssemblyCreateInfo(.line_list);
+
+    const line_pipeline = pipeline_builder.buildPipeline(self.device.handle, self.render_pass);
+    if (line_pipeline == null) return error.PipelineCreationFailed;
+    try self.deletion_queue.append(VulkanDeleter.make(line_pipeline.?, DeviceDispatch.destroyPipeline));
+
+    try createMaterial(&self.materials, line_pipeline.?, pipeline_layout, "line");
 }
 
 fn currentFrame(self: *const @This()) FrameData {
@@ -545,7 +574,7 @@ fn currentFrame(self: *const @This()) FrameData {
 
 fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObject) !void {
     const view = self.camera.viewMatrix();
-    // const view = math.mat.lookAt(.{ 0, 0, 0 }, .{ 0, 0, -1 }, .{ 0, 1, 0 });
+    // const view = math.mat.lookAt(.{ 0, 3, 0 }, .{ 0, 3, -1 }, .{ 0, 1, 0 });
     const projection = math.mat.perspective(std.math.degreesToRadians(f32, 70), self.window.aspectRatio(), 0.1, 200);
 
     self.global_gpu_data.proj = projection;
@@ -622,6 +651,17 @@ fn makeTriangle(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
         .normal = .{ 0, 0, 0 },
         .color = .{ 0, 1, 0 },
     });
+    return vertices;
+}
+
+fn makeAxisLines(allocator: Allocator) !std.ArrayList(Mesh.Vertex) {
+    var vertices = try std.ArrayList(Mesh.Vertex).initCapacity(allocator, 3);
+    try vertices.append(.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 0, 0 }, .color = .{ 1, 0, 0 }, .uv = .{ 0, 0 } });
+    try vertices.append(.{ .position = .{ 1, 0, 0 }, .normal = .{ 0, 0, 0 }, .color = .{ 1, 0, 0 }, .uv = .{ 0, 0 } });
+    try vertices.append(.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 0, 0 }, .color = .{ 0, 1, 0 }, .uv = .{ 0, 0 } });
+    try vertices.append(.{ .position = .{ 0, 1, 0 }, .normal = .{ 0, 0, 0 }, .color = .{ 0, 1, 0 }, .uv = .{ 0, 0 } });
+    try vertices.append(.{ .position = .{ 0, 0, 0 }, .normal = .{ 0, 0, 0 }, .color = .{ 0, 0, 1 }, .uv = .{ 0, 0 } });
+    try vertices.append(.{ .position = .{ 0, 0, 1 }, .normal = .{ 0, 0, 0 }, .color = .{ 0, 0, 1 }, .uv = .{ 0, 0 } });
     return vertices;
 }
 
