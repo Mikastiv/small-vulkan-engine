@@ -130,12 +130,7 @@ pub fn init(allocator: Allocator) !@This() {
     const window = try Window.init(allocator, window_width, window_height, window_title);
     const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
     const surface = try window.createSurface(instance.handle);
-    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
-        .surface = surface,
-        .required_features_11 = .{
-            .shader_draw_parameters = vk.TRUE,
-        },
-    });
+    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{ .surface = surface });
     const device = try vkk.Device.create(allocator, &physical_device, null, null);
     const vma_info = vma.AllocatorCreateInfo{
         .instance = instance.handle,
