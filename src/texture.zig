@@ -21,16 +21,18 @@ pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImag
     const image_size: vk.DeviceSize = @intCast(tex_width * tex_height * 4);
     const image_format = vk.Format.r8g8b8a8_srgb;
 
-    const staging_buffer = try vk_utils.createBuffer(engine.vma_allocator, image_size, .{ .transfer_src_bit = true }, .cpu_only);
-    defer vma.destroyBuffer(engine.vma_allocator, staging_buffer.handle, staging_buffer.allocation);
+    const vma_allocator = engine.vma_allocator;
+
+    const staging_buffer = try vk_utils.createBuffer(vma_allocator, image_size, .{ .transfer_src_bit = true }, .cpu_only);
+    defer vma_allocator.destroyBuffer(staging_buffer.handle, staging_buffer.allocation);
 
     {
-        const data = try vma.mapMemory(engine.vma_allocator, staging_buffer.allocation);
+        const data = try vma_allocator.mapMemory(staging_buffer.allocation);
         const ptr: [*]c.stbi_uc = @ptrCast(@alignCast(data));
 
         @memcpy(ptr, pixels[0..image_size]);
 
-        vma.unmapMemory(engine.vma_allocator, staging_buffer.allocation);
+        vma_allocator.unmapMemory(staging_buffer.allocation);
     }
 
     const extent = vk.Extent3D{
@@ -41,7 +43,7 @@ pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImag
     const image_info = vk_init.imageCreateInfo(image_format, .{ .sampled_bit = true, .transfer_dst_bit = true }, extent);
     const image_alloc_info = vma.AllocationCreateInfo{ .usage = .gpu_only };
 
-    const image = try vma.createImage(engine.vma_allocator, &image_info, &image_alloc_info, null);
+    const image = try vma_allocator.createImage(&image_info, &image_alloc_info, null);
 
     const ImageCopy = struct {
         image: vk.Image,

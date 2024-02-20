@@ -59,7 +59,7 @@ pub fn createBuffer(
 
     const alloc_info = vma.AllocationCreateInfo{ .usage = memory_usage };
 
-    return vma.createBuffer(vma_allocator, &buffer_info, &alloc_info, null);
+    return vma_allocator.createBuffer(&buffer_info, &alloc_info, null);
 }
 
 pub fn createDescriptorSet(device: vk.Device, descriptor_pool: vk.DescriptorPool, layouts: []const vk.DescriptorSetLayout) !vk.DescriptorSet {
@@ -117,7 +117,7 @@ pub fn createDepthImage(vma_allocator: vma.Allocator, depth_format: vk.Format, e
         .required_flags = .{ .device_local_bit = true },
     };
 
-    return vma.createImage(vma_allocator, &depth_image_info, &depth_image_alloc_info, null);
+    return vma_allocator.createImage(&depth_image_info, &depth_image_alloc_info, null);
 }
 
 pub fn createShaderModule(device: vk.Device, bytecode: []align(4) const u8) !vk.ShaderModule {

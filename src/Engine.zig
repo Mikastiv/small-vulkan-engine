@@ -140,7 +140,7 @@ pub fn init(allocator: Allocator) !@This() {
         .physical_device = physical_device.handle,
         .device = device.handle,
     };
-    const vma_allocator = try vma.createAllocator(&vma_info);
+    const vma_allocator = try vma.Allocator.create(&vma_info);
 
     var deletion_queue = DeletionQueue.init(allocator);
     var buffer_deletion_queue = BufferDeletionQueue.init(allocator);
@@ -264,7 +264,7 @@ pub fn deinit(self: *@This()) void {
     self.image_deletion_queue.deinit();
     flushBufferDeletionQueue(self.vma_allocator, self.buffer_deletion_queue.items);
     self.buffer_deletion_queue.deinit();
-    vma.destroyAllocator(self.vma_allocator);
+    self.vma_allocator.destroy();
     flushDeletionQueue(self.device.handle, self.deletion_queue.items);
     self.deletion_queue.deinit();
     self.allocator.free(self.framebuffers);
@@ -558,12 +558,12 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
     const frame_index = self.frame_number % frame_overlap;
     const uniform_offset = alignment * frame_index;
     {
-        const data = try vma.mapMemory(self.vma_allocator, self.global_buffer.allocation);
+        const data = try self.vma_allocator.mapMemory(self.global_buffer.allocation);
         const ptr: [*]u8 = @ptrCast(@alignCast(data));
 
         @memcpy(ptr[uniform_offset .. uniform_offset + @sizeOf(GpuGlobalData)], std.mem.asBytes(&self.global_gpu_data));
 
-        vma.unmapMemory(self.vma_allocator, self.global_buffer.allocation);
+        self.vma_allocator.unmapMemory(self.global_buffer.allocation);
     }
 
     var last_mesh: ?*Mesh = null;
@@ -632,15 +632,15 @@ fn uploadMesh(
     const buffer_size = vertices.items.len * @sizeOf(Mesh.Vertex);
 
     const staging_buffer = try vk_utils.createBuffer(self.vma_allocator, buffer_size, .{ .transfer_src_bit = true }, .cpu_only);
-    defer vma.destroyBuffer(self.vma_allocator, staging_buffer.handle, staging_buffer.allocation);
+    defer self.vma_allocator.destroyBuffer(staging_buffer.handle, staging_buffer.allocation);
 
     {
-        const data = try vma.mapMemory(self.vma_allocator, staging_buffer.allocation);
+        const data = try self.vma_allocator.mapMemory(staging_buffer.allocation);
         const ptr: [*]Mesh.Vertex = @ptrCast(@alignCast(data));
 
         @memcpy(ptr, vertices.items);
 
-        vma.unmapMemory(self.vma_allocator, staging_buffer.allocation);
+        self.vma_allocator.unmapMemory(staging_buffer.allocation);
     }
 
     const buffer = try vk_utils.createBuffer(self.vma_allocator, buffer_size, .{ .vertex_buffer_bit = true, .transfer_dst_bit = true }, .gpu_only);
@@ -679,14 +679,14 @@ fn flushDeletionQueue(device: vk.Device, entries: []const VulkanDeleter) void {
 fn flushBufferDeletionQueue(vma_allocator: vma.Allocator, entries: []const vma.AllocatedBuffer) void {
     var it = std.mem.reverseIterator(entries);
     while (it.next()) |entry| {
-        vma.destroyBuffer(vma_allocator, entry.handle, entry.allocation);
+        vma_allocator.destroyBuffer(entry.handle, entry.allocation);
     }
 }
 
 fn flushImageDeletionQueue(vma_allocator: vma.Allocator, entries: []const vma.AllocatedImage) void {
     var it = std.mem.reverseIterator(entries);
     while (it.next()) |entry| {
-        vma.destroyImage(vma_allocator, entry.handle, entry.allocation);
+        vma_allocator.destroyImage(entry.handle, entry.allocation);
     }
 }
 
