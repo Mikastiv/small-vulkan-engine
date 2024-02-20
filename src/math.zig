@@ -570,32 +570,23 @@ pub const mat = struct {
         std.debug.assert(vec.length2(dir) != 0);
 
         const w = vec.normalize(dir);
-        const u = vec.normalize(vec.cross(up, w));
-        const v = vec.cross(w, u);
+        const u = vec.normalize(vec.cross(w, up));
+        const v = vec.cross(u, w);
 
-        // const dot_u = vec.dot(u, eye);
-        // const dot_v = vec.dot(v, eye);
-        // const dot_w = vec.dot(w, eye);
+        const dot_u = vec.dot(u, eye);
+        const dot_v = vec.dot(v, eye);
+        const dot_w = vec.dot(w, eye);
 
-        const t = translation(vec.neg(eye));
-        const r: Mat4 = .{
-            .{ u[0], v[0], w[0], 0 },
-            .{ u[1], v[1], w[1], 0 },
-            .{ u[2], v[2], w[2], 0 },
-            .{ 0, 0, 0, 1 },
+        return .{
+            .{ u[0], v[0], -w[0], 0 },
+            .{ u[1], v[1], -w[1], 0 },
+            .{ u[2], v[2], -w[2], 0 },
+            .{ -dot_u, -dot_v, dot_w, 1 },
         };
-
-        // return .{
-        //     .{ u[0], v[0], w[0], 0 },
-        //     .{ u[1], v[1], w[1], 0 },
-        //     .{ u[2], v[2], w[2], 0 },
-        //     .{ -dot_u, -dot_v, -dot_w, 1 },
-        // };
-        return mul(&t, &r);
     }
 
     pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {
-        return lookAtDir(eye, vec.sub(eye, target), up);
+        return lookAtDir(eye, vec.sub(target, eye), up);
     }
 
     pub fn determinant(m: anytype) f32 {
