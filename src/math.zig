@@ -573,16 +573,25 @@ pub const mat = struct {
         const u = vec.normalize(vec.cross(up, w));
         const v = vec.cross(w, u);
 
-        const dot_u = vec.dot(u, eye);
-        const dot_v = vec.dot(v, eye);
-        const dot_w = vec.dot(w, eye);
+        // const dot_u = vec.dot(u, eye);
+        // const dot_v = vec.dot(v, eye);
+        // const dot_w = vec.dot(w, eye);
 
-        return .{
+        const t = translation(vec.neg(eye));
+        const r: Mat4 = .{
             .{ u[0], v[0], w[0], 0 },
             .{ u[1], v[1], w[1], 0 },
             .{ u[2], v[2], w[2], 0 },
-            .{ -dot_u, -dot_v, -dot_w, 1 },
+            .{ 0, 0, 0, 1 },
         };
+
+        // return .{
+        //     .{ u[0], v[0], w[0], 0 },
+        //     .{ u[1], v[1], w[1], 0 },
+        //     .{ u[2], v[2], w[2], 0 },
+        //     .{ -dot_u, -dot_v, -dot_w, 1 },
+        // };
+        return mul(&t, &r);
     }
 
     pub fn lookAt(eye: Vec3, target: Vec3, up: Vec3) Mat4 {

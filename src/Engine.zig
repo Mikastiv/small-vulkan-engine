@@ -133,7 +133,12 @@ pub fn init(allocator: Allocator) !@This() {
     const window = try Window.init(allocator, window_width, window_height, window_title);
     const instance = try vkk.Instance.create(allocator, c.glfwGetInstanceProcAddress, .{});
     const surface = try window.createSurface(instance.handle);
-    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{ .surface = surface });
+    const physical_device = try vkk.PhysicalDevice.select(allocator, &instance, .{
+        .surface = surface,
+        .required_features = .{
+            .wide_lines = vk.TRUE,
+        },
+    });
     const device = try vkk.Device.create(allocator, &physical_device, null, null);
     const vma_info = vma.AllocatorCreateInfo{
         .instance = instance.handle,
@@ -560,6 +565,7 @@ fn initPipelines(self: *@This()) !void {
     pipeline_builder.shader_stages = shader_stages;
 
     pipeline_builder.input_assembly = vk_init.inputAssemblyCreateInfo(.line_list);
+    pipeline_builder.rasterizer.line_width = 3;
 
     const line_pipeline = pipeline_builder.buildPipeline(self.device.handle, self.render_pass);
     if (line_pipeline == null) return error.PipelineCreationFailed;
