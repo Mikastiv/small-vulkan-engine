@@ -125,6 +125,8 @@ upload_context: UploadContext,
 
 camera: Camera,
 
+imgui_descriptor_pool: vk.DescriptorPool,
+
 pub fn init(allocator: Allocator) !@This() {
     if (c.glfwInit() == c.GLFW_FALSE) return error.GlfwInitFailed;
 
@@ -213,6 +215,9 @@ pub fn init(allocator: Allocator) !@This() {
     const texture_set_layout = try vk_utils.createDescriptorSetLayout(device.handle, &.{texture_bind});
     try deletion_queue.append(VulkanDeleter.make(texture_set_layout, DeviceDispatch.destroyDescriptorSetLayout));
 
+    const imgui_descriptor_pool = try createImguiDescriptorPool(device.handle);
+    try deletion_queue.append(VulkanDeleter.make(imgui_descriptor_pool, DeviceDispatch.destroyDescriptorPool));
+
     var engine: @This() = .{
         .allocator = allocator,
         .window = window,
@@ -244,17 +249,20 @@ pub fn init(allocator: Allocator) !@This() {
         .upload_context = upload_context,
         .single_texture_set_layout = texture_set_layout,
         .camera = Camera.init(.{ 0, 6, 10 }),
+        .imgui_descriptor_pool = imgui_descriptor_pool,
     };
 
     try engine.initPipelines();
     try engine.initImages();
     try engine.initMeshes();
     try engine.initScene();
+    try engine.initImGui();
 
     return engine;
 }
 
 pub fn deinit(self: *@This()) void {
+    c.cImGui_ImplVulkan_Shutdown();
     self.renderables.deinit();
     self.materials.deinit();
     {
@@ -301,6 +309,14 @@ pub fn run(self: *@This()) !void {
         }
 
         try self.update(dt);
+
+        c.cImGui_ImplVulkan_NewFrame();
+        c.cImGui_ImplGlfw_NewFrame();
+
+        c.ImGui_NewFrame();
+
+        c.ImGui_ShowDemoWindow(null);
+
         try self.draw();
     }
 }
@@ -328,6 +344,31 @@ pub fn immediateSubmit(self: *const @This(), submit_ctx: anytype) !void {
     try vkd().resetFences(self.device.handle, 1, @ptrCast(&self.upload_context.fence));
 
     try vkd().resetCommandPool(self.device.handle, self.upload_context.command_pool, .{});
+}
+
+fn createImguiDescriptorPool(device: vk.Device) !vk.DescriptorPool {
+    const pool_sizes = [_]vk.DescriptorPoolSize{
+        .{ .type = .sampler, .descriptor_count = 1000 },
+        .{ .type = .combined_image_sampler, .descriptor_count = 1000 },
+        .{ .type = .sampled_image, .descriptor_count = 1000 },
+        .{ .type = .storage_image, .descriptor_count = 1000 },
+        .{ .type = .uniform_texel_buffer, .descriptor_count = 1000 },
+        .{ .type = .storage_texel_buffer, .descriptor_count = 1000 },
+        .{ .type = .uniform_buffer, .descriptor_count = 1000 },
+        .{ .type = .storage_buffer, .descriptor_count = 1000 },
+        .{ .type = .uniform_buffer_dynamic, .descriptor_count = 1000 },
+        .{ .type = .storage_buffer_dynamic, .descriptor_count = 1000 },
+        .{ .type = .input_attachment, .descriptor_count = 1000 },
+    };
+
+    const pool_info = vk.DescriptorPoolCreateInfo{
+        .flags = .{ .free_descriptor_set_bit = true },
+        .max_sets = 1000,
+        .pool_size_count = @intCast(pool_sizes.len),
+        .p_pool_sizes = &pool_sizes,
+    };
+
+    return vkd().createDescriptorPool(device, &pool_info, null);
 }
 
 fn createUploadContext(device: vk.Device, graphics_family_index: u32) !UploadContext {
@@ -387,6 +428,25 @@ fn update(self: *@This(), dt: f32) !void {
     if (self.window.key_events[c.GLFW_KEY_D] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, right);
     if (self.window.key_events[c.GLFW_KEY_SPACE] == c.GLFW_PRESS) self.camera.pos = math.vec.add(self.camera.pos, up);
     if (self.window.key_events[c.GLFW_KEY_LEFT_SHIFT] == c.GLFW_PRESS) self.camera.pos = math.vec.sub(self.camera.pos, up);
+}
+
+fn initImGui(self: @This()) !void {
+    _ = c.ImGui_CreateContext(null);
+    if (!c.cImGui_ImplGlfw_InitForVulkan(self.window.handle, true)) return error.ImGuiInitFailed;
+
+    var init_info = c.ImGui_ImplVulkan_InitInfo{
+        .Instance = c.vulkanZigHandleToC(c.VkInstance, self.instance.handle),
+        .PhysicalDevice = c.vulkanZigHandleToC(c.VkPhysicalDevice, self.device.physical_device.handle),
+        .Device = c.vulkanZigHandleToC(c.VkDevice, self.device.handle),
+        .Queue = c.vulkanZigHandleToC(c.VkQueue, self.device.graphics_queue),
+        .DescriptorPool = c.vulkanZigHandleToC(c.VkDescriptorPool, self.imgui_descriptor_pool),
+        .MinImageCount = self.swapchain.image_count,
+        .ImageCount = self.swapchain.image_count,
+        .MSAASamples = c.VK_SAMPLE_COUNT_1_BIT,
+    };
+
+    if (!c.cImGui_ImplVulkan_Init(@ptrCast(&init_info), c.vulkanZigHandleToC(c.VkRenderPass, self.render_pass))) return error.ImGuiInitFailed;
+    if (!c.cImGui_ImplVulkan_CreateFontsTexture()) return error.ImGuiInitFailed;
 }
 
 fn initImages(self: *@This()) !void {
@@ -740,6 +800,8 @@ fn flushImageDeletionQueue(vma_allocator: vma.Allocator, entries: []const vma.Al
 }
 
 fn draw(self: *@This()) !void {
+    c.ImGui_Render();
+
     const frame = self.currentFrame();
 
     var result = try vkd().waitForFences(self.device.handle, 1, @ptrCast(&frame.render_fence), vk.TRUE, std.time.ns_per_s);
@@ -784,6 +846,8 @@ fn draw(self: *@This()) !void {
     vkd().cmdBeginRenderPass(cmd, &render_pass_info, .@"inline");
 
     try self.drawObjects(cmd, self.renderables.items);
+
+    c.cImGui_ImplVulkan_RenderDrawData(c.ImGui_GetDrawData(), c.vulkanZigHandleToC(c.VkCommandBuffer, cmd));
 
     vkd().cmdEndRenderPass(cmd);
     try vkd().endCommandBuffer(cmd);
