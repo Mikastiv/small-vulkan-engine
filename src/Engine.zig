@@ -25,7 +25,7 @@ const window_title = "Vulkan Engine";
 
 const frame_overlap = 2;
 const max_objects = 10000;
-const camera_sensivity = 0.3;
+const camera_sensivity = 0.5;
 const move_speed = 10;
 
 const VulkanDeleter = vk_utils.VulkanDeleter;

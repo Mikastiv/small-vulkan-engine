@@ -2,6 +2,7 @@
 
 layout (location = 0) in vec3 color;
 layout (location = 1) in vec2 uv;
+layout (location = 2) in vec3 normal;
 
 layout (location = 0) out vec4 out_color;
 
@@ -20,8 +21,10 @@ layout (set = 1, binding = 0) uniform sampler2D tex1;
 
 void main()
 {
-	const float gamma = 2.2;
-	const vec3 pixel = texture(tex1, uv).rgb;
+	const vec3 sunlight_dir = normalize(vec3(-1, -1, 1));
+	const float light_factor = dot(-sunlight_dir, normalize(normal));
+	const vec3 pixel = texture(tex1, uv).rgb * max(light_factor, 0.35);
 
+	const float gamma = 2.2;
 	out_color = vec4(pow(pixel, vec3(1.0 / gamma)), 1.0);
 }
