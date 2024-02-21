@@ -31,8 +31,7 @@ const move_speed = 10;
 const VulkanDeleter = vk_utils.VulkanDeleter;
 
 const MeshPushConstants = extern struct {
-    data: math.Vec4 align(16),
-    render_matrix: math.Mat4 align(16),
+    model_matrix: math.Mat4 align(16),
 };
 
 const GpuGlobalData = extern struct {
@@ -693,8 +692,7 @@ fn drawObjects(self: *@This(), cmd: vk.CommandBuffer, objects: []const RenderObj
         }
 
         const push = MeshPushConstants{
-            .data = .{ 0, 0, 0, 0 },
-            .render_matrix = object.transform_matrix,
+            .model_matrix = object.transform_matrix,
         };
 
         vkd().cmdPushConstants(cmd, object.material.pipeline_layout, .{ .vertex_bit = true }, 0, @sizeOf(MeshPushConstants), &push);

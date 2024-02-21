@@ -21,14 +21,11 @@ layout (set = 0, binding = 0) uniform GlobalData {
 } global_data;
 
 layout (push_constant) uniform Constants {
-    vec4 data;
-    mat4 render_matrix;
+    mat4 model_matrix;
 } push;
 
 void main() {
-    // mat4 model_matrix = object_buffer.objects[gl_BaseInstance].model;
-    mat4 model_matrix = push.render_matrix;
-    mat4 transform_matrix = global_data.view_proj * model_matrix;
+    mat4 transform_matrix = global_data.view_proj * push.model_matrix;
     gl_Position = transform_matrix * vec4(position, 1);
     out_color = color;
     out_uv = uv;
