@@ -156,6 +156,9 @@ pub fn init(allocator: Allocator) !@This() {
     const swapchain = try vkk.Swapchain.create(allocator, &device, surface, .{
         .desired_extent = window.extent(),
         .desired_present_modes = &.{.fifo_khr},
+        .desired_formats = &.{
+            .{ .format = .b8g8r8a8_unorm, .color_space = .srgb_nonlinear_khr },
+        },
     });
     try deletion_queue.append(VulkanDeleter.make(swapchain.handle, DeviceDispatch.destroySwapchainKHR));
 
@@ -315,7 +318,16 @@ pub fn run(self: *@This()) !void {
 
         c.ImGui_NewFrame();
 
-        c.ImGui_ShowDemoWindow(null);
+        _ = c.ImGui_Begin("Game info", null, c.ImGuiWindowFlags_None);
+        c.ImGui_Text("WASD: move");
+        c.ImGui_Text("Space: ascend");
+        c.ImGui_Text("Left shift: descend");
+        c.ImGui_Text("Q: capture cursor");
+        c.ImGui_Separator();
+        c.ImGui_BeginDisabled(true);
+        _ = c.ImGui_Checkbox("Cursor captured", &self.window.capture_cursor);
+        c.ImGui_EndDisabled();
+        c.ImGui_End();
 
         try self.draw();
     }

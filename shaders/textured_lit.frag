@@ -20,5 +20,8 @@ layout (set = 1, binding = 0) uniform sampler2D tex1;
 
 void main()
 {
-	out_color = vec4(texture(tex1, uv).rgb, 1.0);
+	const float gamma = 2.2;
+	const vec3 pixel = texture(tex1, uv).rgb;
+
+	out_color = vec4(pow(pixel, vec3(1.0 / gamma)), 1.0);
 }
