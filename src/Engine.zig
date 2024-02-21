@@ -139,6 +139,7 @@ pub fn init(allocator: Allocator) !@This() {
         .surface = surface,
         .required_features = .{
             .wide_lines = vk.TRUE,
+            .fill_mode_non_solid = vk.TRUE,
         },
     });
     const device = try vkk.Device.create(allocator, &physical_device, null, null);
@@ -840,8 +841,7 @@ fn draw(self: *@This()) !void {
     };
     try vkd().beginCommandBuffer(cmd, &cmd_begin_info);
 
-    const flash = @abs(@sin(@as(f32, @floatFromInt(self.frame_number)) / 120));
-    const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0, 0, flash, 1 } } };
+    const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0.1, 0.1, 0.1, 1 } } };
     const depth_clear = vk.ClearValue{ .depth_stencil = .{ .depth = 1, .stencil = 0 } };
 
     const clear_values = [_]vk.ClearValue{ clear_value, depth_clear };
