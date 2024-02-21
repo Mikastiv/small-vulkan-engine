@@ -104,22 +104,6 @@ pub fn createDescriptorSetLayout(
     return try vkd().createDescriptorSetLayout(device, &set_info, null);
 }
 
-pub fn createDepthImage(vma_allocator: vma.Allocator, depth_format: vk.Format, extent: vk.Extent2D) !vma.AllocatedImage {
-    const depth_extent = vk.Extent3D{
-        .depth = 1,
-        .width = extent.width,
-        .height = extent.height,
-    };
-
-    const depth_image_info = vk_init.imageCreateInfo(depth_format, .{ .depth_stencil_attachment_bit = true }, depth_extent);
-    const depth_image_alloc_info = vma.AllocationCreateInfo{
-        .usage = .gpu_only,
-        .required_flags = .{ .device_local_bit = true },
-    };
-
-    return vma_allocator.createImage(&depth_image_info, &depth_image_alloc_info, null);
-}
-
 pub fn createShaderModule(device: vk.Device, bytecode: []align(4) const u8) !vk.ShaderModule {
     const create_info = vk.ShaderModuleCreateInfo{
         .code_size = bytecode.len,

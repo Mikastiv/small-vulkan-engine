@@ -2,14 +2,13 @@ const std = @import("std");
 const vk = @import("vulkan-zig");
 const vkk = @import("vk-kickstart");
 const c = @import("c.zig");
-const vma = @import("vma-zig");
 const Engine = @import("Engine.zig");
 const vk_init = @import("vk_init.zig");
 const vk_utils = @import("vk_utils.zig");
 
 const vkd = vkk.dispatch.vkd;
 
-pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImage {
+pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !Engine.Image {
     var tex_width: c_int = undefined;
     var tex_height: c_int = undefined;
     var tex_channels: c_int = undefined;
@@ -21,18 +20,19 @@ pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImag
     const image_size: vk.DeviceSize = @intCast(tex_width * tex_height * 4);
     const image_format = vk.Format.r8g8b8a8_srgb;
 
-    const vma_allocator = engine.vma_allocator;
-
-    const staging_buffer = try vk_utils.createBuffer(vma_allocator, image_size, .{ .transfer_src_bit = true }, .cpu_only);
-    defer vma_allocator.destroyBuffer(staging_buffer.handle, staging_buffer.allocation);
+    const staging_buffer = try Engine.createBuffer(&engine.device, image_size, .{ .transfer_src_bit = true }, .{ .host_visible_bit = true });
+    defer {
+        vkd().destroyBuffer(engine.device.handle, staging_buffer.handle, null);
+        vkd().freeMemory(engine.device.handle, staging_buffer.memory, null);
+    }
 
     {
-        const data = try vma_allocator.mapMemory(staging_buffer.allocation);
+        const data = try vkd().mapMemory(engine.device.handle, staging_buffer.memory, 0, image_size, .{});
         const ptr: [*]c.stbi_uc = @ptrCast(@alignCast(data));
 
         @memcpy(ptr, pixels[0..image_size]);
 
-        vma_allocator.unmapMemory(staging_buffer.allocation);
+        vkd().unmapMemory(engine.device.handle, staging_buffer.memory);
     }
 
     const extent = vk.Extent3D{
@@ -41,9 +41,8 @@ pub fn loadFromFile(engine: *Engine, filename: [*:0]const u8) !vma.AllocatedImag
         .depth = 1,
     };
     const image_info = vk_init.imageCreateInfo(image_format, .{ .sampled_bit = true, .transfer_dst_bit = true }, extent);
-    const image_alloc_info = vma.AllocationCreateInfo{ .usage = .gpu_only };
 
-    const image = try vma_allocator.createImage(&image_info, &image_alloc_info, null);
+    const image = try Engine.createImage(&engine.device, &image_info, .{ .device_local_bit = true });
 
     const ImageCopy = struct {
         image: vk.Image,
