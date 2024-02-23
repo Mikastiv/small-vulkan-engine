@@ -147,7 +147,7 @@ fn cursorPosCallback(window: ?*c.GLFWwindow, xpos: f64, ypos: f64) callconv(.C) 
 
     self.mouse_offset = .{
         xpos_f32 - self.last_mouse_pos[0],
-        ypos_f32 - self.last_mouse_pos[1],
+        self.last_mouse_pos[1] - ypos_f32,
     };
 
     self.last_mouse_pos = .{ xpos_f32, ypos_f32 };

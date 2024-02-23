@@ -32,7 +32,7 @@ pub fn update(self: *@This(), offset: math.Vec2) void {
 
     const dir = math.Vec3{
         @cos(yaw) * @cos(pitch),
-        -@sin(pitch),
+        @sin(pitch),
         @sin(yaw) * @cos(pitch),
     };
 
