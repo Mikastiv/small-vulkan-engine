@@ -18,10 +18,6 @@ pub fn build(b: *std.Build) void {
         .enable_validation = if (optimize == .Debug) true else false,
     });
 
-    const vma_zig = b.dependency("vma_zig", .{
-        .registry = xml_path,
-    });
-
     const glfw = b.dependency("glfw", .{
         .target = target,
         .optimize = .ReleaseFast,
@@ -76,7 +72,6 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addImport("vk-kickstart", vk_kickstart.module("vk-kickstart"));
     exe.root_module.addImport("vulkan-zig", vkzig.module("vulkan-zig"));
-    exe.root_module.addImport("vma-zig", vma_zig.module("vma-zig"));
     exe.root_module.addImport("shaders", shaders.getModule());
     exe.linkLibCpp();
     exe.linkLibrary(glfw);

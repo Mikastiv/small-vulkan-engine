@@ -2,7 +2,6 @@ const std = @import("std");
 const math = @import("math.zig");
 const Engine = @import("Engine.zig");
 const vk = @import("vulkan-zig");
-const vma = @import("vma-zig");
 const obj_loader = @import("obj_loader.zig");
 
 pub const VertexInputDescription = struct {
@@ -45,7 +44,7 @@ pub const Vertex = extern struct {
 };
 
 vertices: std.ArrayList(Vertex),
-vertex_buffer: vma.AllocatedBuffer = undefined,
+vertex_buffer: Engine.Buffer = undefined,
 
 pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !std.ArrayList(Vertex) {
     var mesh = try obj_loader.parse_file(allocator, filename);

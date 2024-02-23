@@ -15,10 +15,6 @@
             .url = "https://github.com/Mikastiv/vk-kickstart/archive/011fbc50a4490ebf7ae09d6e46c6271cb8e42a28.tar.gz",
             .hash = "1220baf586fbef9362579851dbb0c4a3dc61bc887a2a7ae17e2c776b8d4cc5b5a62e",
         },
-        .vma_zig = .{
-            .url = "https://github.com/Mikastiv/vma-zig/archive/8d2be4b815ce06612ee0b106a593978f86d1a0a1.tar.gz",
-            .hash = "12201860496dd3d63a9e47abe58806011866e54ed906e2e133db03db0a4e2cf7a2f9",
-        },
     },
     .paths = .{
         "build.zig",
